@@ -133,6 +133,75 @@ Tool call payload (what MCP clients send under the hood):
 
 If your CLI supports direct "tools/call", pass the payload above; otherwise ask the CLI agent to call tool `solve` with those arguments.
 
+## How to use as an AI agent (arbiter workflow)
+
+The booster is an idea generator, not the final answer. The AI agent (you) is the arbiter: you read the JSON output, select and compose the best micro‑steps, and produce the final solution.
+
+### What the booster provides
+- **Micro‑steps**: short, actionable suggestions (<= 200 chars) with rationale and optional `how_to_verify`.
+- **Scoring**: heuristic scores for step quality (information gain, novelty vs. history, weak consistency). Treat scores as signals, not ground truth.
+- **Diagnostics**: proof that an LLM was called when available (`diagnostics.provider`, `lastModel`, `rawSamples`).
+- **Robust parsing**: prose‑to‑JSON extraction and `<think>...</think>` removal; if JSON is poor, fallback heuristics still return useful, verifiable steps.
+
+### Your workflow (recommended)
+1) Call `solve` with a clear task and a small number of iterations (e.g., 6–10). Optionally set `numCandidates` 5–7.
+2) Parse the returned JSON; look at `steps` and `diagnostics`.
+3) Pick 1–2 best steps (you decide), prefer those with concrete `how_to_verify` and clear information gain. Ignore placeholders/meta.
+4) Apply the chosen ideas in your own reasoning; if helpful, call `step` to get the next set of ideas, or re‑`solve` with a refined task.
+5) Synthesize the final answer yourself. The booster is a generator of ideas; you compose and conclude.
+
+### How to read steps
+- **text**: must be an actionable micro‑step, domain‑agnostic (e.g., "Weigh 1,2,3 vs 4,5,6", "Design a quick experiment that isolates one factor", "Check a blocking constraint").
+- **how_to_verify** (preferred): a concrete, local check (e.g., an outcome rule, a measurement, a pass/fail criterion).
+- **rationale**: brief “why now”.
+- **score.totalScore**: use as a hint; you can still pick a lower‑scored idea if it is better for your specific task.
+
+### Tuning for different models
+- Weak models (e.g., small Qwen): keep `numCandidates` modest (3–5), rely on fallback heuristics; you remain strict on content (discard meta/boilerplate).
+- Strong models (e.g., GPT‑5 high): raise `numCandidates` (7–9), optionally enable a short beam (`beamWidth: 2`, `beamDepth: 2`) and set `minImprovement` > 0 to avoid stagnation.
+
+### Provider selection and running without keys
+- The server auto‑selects provider. See “Provider selection order (automatic)” above.
+  - With keys (Cerebras/OpenAI): direct HTTP.
+  - Without keys but MCP client supports sampling: uses client’s model via MCP.
+  - Otherwise: heuristic fallback still returns concrete, verifiable steps.
+
+### When output isn’t clean JSON
+- The server strips `<think>` blocks and extracts the last JSON block if present.
+- If only prose is returned, it parses numbered/bulleted lists into steps and captures `how_to_verify` when possible.
+- If content is still weak, heuristics generate diversified, domain‑agnostic actions with verification hooks.
+
+### Quality guardrails used by the booster
+- JSON‑first request with explicit fields; meta‑phrases are discouraged and filtered.
+- Preference for novelty vs. history; deduplication and loop/stagnation checks.
+- Bonus for steps with `how_to_verify`; length bounds to keep actions small/local.
+
+### Minimal examples (agent‑side usage)
+- **One‑shot idea generation**
+```json
+{
+  "name": "solve",
+  "arguments": {
+    "task": "Plan a 3-step experiment to test if X causes Y under constraint Z.",
+    "iterations": 8,
+    "config": { "numCandidates": 5 },
+    "outputPath": "./summary.json",
+    "outputFormat": "json"
+  }
+}
+```
+Then, from `steps`, pick 1–2 with the clearest `how_to_verify` to drive your answer.
+
+- **Refine with multi‑step** (optional)
+  - Start with `start` → use returned `sessionId`.
+  - Call `multi-step` with `{ iterations: 3, overrideNumCandidates: 7 }`.
+  - `summarize` to get a concise recap; you still decide the final solution.
+
+### Practical selection tips (as the arbiter)
+- Prefer steps that: increase information quickly, isolate one factor, or provide a crisp decision rule.
+- Downrank steps that: restate the task, are vague, or duplicate previous steps.
+- Use `diagnostics.rawSamples` if you need to audit what the model actually saw and returned.
+
 #### Claude CLI/Desktop (MCP sampling)
 
 If you use Claude CLI/Desktop with MCP enabled, add the server to its config so the client exposes the sampling capability to our server.
