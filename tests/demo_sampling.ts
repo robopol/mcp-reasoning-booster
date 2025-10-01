@@ -53,7 +53,23 @@ async function run() {
   await client.connect(transport);
 
   // One-shot solve (simplest demo)
-  const task = (globalThis as any).process?.env?.TASK ?? "Plan a household monthly budget: categorize expenses, set savings goal, prioritize essentials, reduce discretionary spending, create step-by-step actions";
+  function getArg(flag: string): string | undefined {
+    const argv: string[] = ((globalThis as any).process?.argv ?? []) as string[];
+    for (let i = 0; i < argv.length; i++) {
+      const a = argv[i];
+      if (a === flag && i + 1 < argv.length) return argv[i + 1];
+      const eq = flag + "=";
+      if (a.startsWith(eq)) return a.slice(eq.length);
+    }
+    return undefined;
+  }
+  const taskArg = getArg("--task");
+  const taskEnv = (globalThis as any).process?.env?.TASK as string | undefined;
+  const task = (taskArg && taskArg.trim().length > 0)
+    ? taskArg
+    : (taskEnv && taskEnv.trim().length > 0)
+      ? taskEnv
+      : "Plan a household monthly budget: categorize expenses, set savings goal, prioritize essentials, reduce discretionary spending, create step-by-step actions";
   const res = await client.callTool({
     name: "solve",
     arguments: {
@@ -82,5 +98,3 @@ run().catch(err => {
   console.error(err?.stack || String(err));
   (globalThis as any).process?.exit?.(1);
 });
-
-
