@@ -18,11 +18,31 @@ npm run dev
 
 ### Quickstart (one-shot)
 
-Call the `solve` tool once; it will start a session, run N iterations, and return a summary plus steps:
+Call the `solve` tool once; it will start a session, run N iterations, and return a JSON result in the MCP response. This JSON is the primary output.
 
 ```json
 { "task": "your task", "iterations": 8, "config": { "useSampling": true, "numCandidates": 5, "topM": 2 } }
 ```
+
+### Terminal demo (PowerShell and Bash)
+
+- PowerShell (Windows):
+```bash
+cd mcp-reasoning-booster
+npm run build
+npx --yes tsx tests\demo_sampling.ts --task "Plan a 3-step experiment to test if X causes Y under constraint Z."
+```
+
+- Bash (macOS/Linux):
+```bash
+cd mcp-reasoning-booster
+npm run build
+npx tsx tests/demo_sampling.ts --task 'Plan a 3-step experiment to test if X causes Y under constraint Z.'
+```
+
+Notes:
+- The demo script accepts only `--task` (no env vars needed). This avoids quoting issues.
+- The MCP server returns the PRIMARY JSON inline; the demo also writes a copy to `demo-summary.json` via `outputPath`.
 
 ### AI usage (for MCP-enabled agents)
 
@@ -41,13 +61,23 @@ Call the `solve` tool once; it will start a session, run N iterations, and retur
   }
 }
 ```
-- Expected result: `content[0].text` is a JSON string with:
+- Expected result (primary): the MCP response’s `content[0].text` contains a JSON string with:
 ```json
 { "sessionId": "ses_xxx", "summary": "Summary: ...", "steps": [ { "index": 0, "text": "..." } ], "config": { ... } }
 ```
-- Optional server-side output:
-  - If `outputPath` is provided, the server will also write the result to disk.
-  - `outputFormat`: "json" (default) or "text" (summary only).
+- Optional server-side file output: If `outputPath` is provided, the server also writes the result to disk. `outputFormat`: "json" (default) or "text" (summary only). This is optional; clients should primarily read the JSON returned in the MCP response.
+
+#### Where to read the result (MCP contract)
+- On every `tools/call` for `solve`, the PRIMARY result is returned inline in the MCP response under `content[0].text` as a JSON string. Your agent MUST parse this JSON to proceed.
+- Do not rely on console logs or non‑JSON text; always parse the JSON from the `content` array.
+- When `outputPath` is provided, the server writes the SAME payload to the specified file, but your agent should still parse the inline JSON it already received.
+- Typical shape of the parsed JSON:
+  - `sessionId`: string
+  - `summary`: short text summary
+  - `steps`: array of steps `{ index, text, rationale, howToVerify?, expectedOutcomes?, score? }`
+  - `config`: effective booster config
+  - `diagnostics`: sampler info (e.g., provider, lastModel, rawSamples)
+
 - Policy for agents:
   - Prefer `solve` (one shot). If more refinement is needed, optionally call `step` with `{ "sessionId": "...", "overrideNumCandidates": 7 }` then `summarize`.
   - If client does not support sampling, omit `useSampling`; server falls back to heuristic proposals.
@@ -117,7 +147,7 @@ Most MCP clients (Claude CLI/Desktop, other MCP‑enabled CLIs) accept a JSON co
 - Place/path depends on your client (see its docs). The shape above is portable across MCP clients.
 - Server auto‑selects provider: API keys (from `secrets.local.txt`/env) > MCP sampling (client’s model) > heuristic fallback.
 
-Tool call payload (what MCP clients send under the hood):
+Tool call payload (what MCP clients send under the hood). Read the returned JSON from the MCP response; file saving is optional and controlled by `outputPath`:
 
 ```json
 {
@@ -159,6 +189,12 @@ The booster is an idea generator, not the final answer. The AI agent (you) is th
 ### Tuning for different models
 - Weak models (e.g., small Qwen): keep `numCandidates` modest (3–5), rely on fallback heuristics; you remain strict on content (discard meta/boilerplate).
 - Strong models (e.g., GPT‑5 high): raise `numCandidates` (7–9), optionally enable a short beam (`beamWidth: 2`, `beamDepth: 2`) and set `minImprovement` > 0 to avoid stagnation.
+
+### Beam search and cross‑branch idea sharing (hints)
+- The booster can run a short beam. Budget is distributed via UCB (Upper Confidence Bound): branches with better cumulative score get more expansions while still exploring others.
+- Cross‑branch sharing: when a branch generates high‑scoring, verifiable micro‑steps (with `how_to_verify`), they are promoted into `state.hints`. Other branches get a slight score boost if their candidates overlap with these hints, encouraging reuse of proven sub‑ideas without forcing convergence.
+- Hints are capped (recent ~20) and deduplicated by similarity to keep diversity.
+- Effect in practice: good local tests propagate across branches; weak or meta steps don’t spread.
 
 ### Provider selection and running without keys
 - The server auto‑selects provider. See “Provider selection order (automatic)” above.
