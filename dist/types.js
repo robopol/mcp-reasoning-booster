@@ -1,0 +1,14 @@
+export const DefaultConfig = {
+    maxSteps: 16,
+    numCandidates: 5,
+    topM: 2,
+    allowBacktrack: true,
+    wRules: 0.6,
+    wRedundancy: 0.25,
+    wConsistency: 0.15,
+    useSampling: false,
+    samplingMaxTokens: 800,
+    minImprovement: 0.01,
+    beamWidth: 1,
+    beamDepth: 2,
+};
