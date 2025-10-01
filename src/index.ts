@@ -2,6 +2,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, CallToolResultSchema, ListToolsRequestSchema, ListToolsResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { writeFile } from "node:fs/promises";
+import { resolve as pathResolve, join as pathJoin, isAbsolute as pathIsAbsolute } from "node:path";
 import { DefaultConfig, ReasoningConfig, Session, State, SamplerDiagnostics } from "./types.js";
 import { loadSamplerConfig } from "./config.js";
 import { createVerifier } from "./verifier.js";
@@ -251,7 +252,7 @@ toolRegistry.set("multi-step", {
     const overrideNumCandidates = (args as any).overrideNumCandidates as number | undefined;
     const session = sessions.get(sessionId);
     if (!session) throw new Error(`Unknown sessionId: ${sessionId}`);
-    const sampler = session.config.useSampling ? getSampler() : undefined;
+    const sampler = session.config.useSampling ? getSampler(session.diagnostics ?? (session.diagnostics = { totalCalls: 0 })) : undefined;
     for (let i = 0; i < iterations; i++) {
       const cfg: ReasoningConfig = {
         ...session.config,
@@ -344,8 +345,11 @@ toolRegistry.set("solve", {
     const cfg = (args as any).config as Partial<ReasoningConfig> | undefined;
     const merged: ReasoningConfig = { ...DefaultConfig, ...(cfg ?? {}) };
     if (cfg?.useSampling === undefined) {
+      // Priority: direct API keys > MCP sampling > off
+      const samplerCfg = loadSamplerConfig();
+      const hasKeys = !!(samplerCfg.cerebrasApiKey || samplerCfg.openaiApiKey);
       const caps = (server as any).getClientCapabilities?.();
-      if (caps?.sampling) merged.useSampling = true;
+      if (hasKeys) merged.useSampling = true; else if (caps?.sampling) merged.useSampling = true;
     }
 
     // init session
@@ -354,7 +358,6 @@ toolRegistry.set("solve", {
     const session: Session = { id, state, config: merged, history: [], diagnostics: { totalCalls: 0 } };
     sessions.set(id, session);
 
-    if (session.diagnostics) session.diagnostics.provider = "mcp";
     const sampler = merged.useSampling ? getSampler(session.diagnostics!) : undefined;
     for (let i = 0; i < iterations; i++) {
       const verifier = createVerifier(merged);
@@ -375,7 +378,12 @@ toolRegistry.set("solve", {
     const outputFormat = String((args as any).outputFormat ?? "json").toLowerCase();
     try {
       const text = outputFormat === "text" ? summary : JSON.stringify(payload, null, 2);
-      await writeFile(outputPath, text, { encoding: "utf8" });
+      // Safe write: keep writes inside current working directory
+      const cwd = process.cwd();
+      const abs = pathIsAbsolute(outputPath) ? outputPath : pathResolve(cwd, outputPath);
+      const safeBase = pathResolve(cwd);
+      const safePath = abs.startsWith(safeBase) ? abs : pathResolve(safeBase, pathJoin(".", "summary.json"));
+      await writeFile(safePath, text, { encoding: "utf8" });
     } catch {
       // ignore write errors, still return payload
     }
