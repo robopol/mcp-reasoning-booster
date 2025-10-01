@@ -32,6 +32,60 @@ function parseProseToProposals(text: string, k: number): StepProposal[] {
   return items;
 }
 
+function stripThinkingBlocks(text: string): string {
+  // Odstráni Qwen/Cerebras <think>...</think> bloky a podobné tagy
+  return text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+}
+
+function tryParseJsonArray(raw: string): Array<any> | null {
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : null;
+  } catch { return null; }
+}
+
+function extractProposalsFromRaw(raw: string, k: number): StepProposal[] {
+  if (!raw) return [];
+  const cleaned = stripThinkingBlocks(raw);
+
+  // 1) Skús code-fence bloky s JSONom (```...```), preferuj posledný
+  const fenceRegex = /```[a-zA-Z]*\n([\s\S]*?)```/g;
+  const fenced: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = fenceRegex.exec(cleaned)) !== null) fenced.push((m[1] ?? ""));
+  for (let i = fenced.length - 1; i >= 0; i--) {
+    const candidate = fenced[i] ?? "";
+    const arr = tryParseJsonArray(candidate.trim());
+    if (arr && arr.length) {
+      const items: StepProposal[] = arr
+        .filter((o: any) => typeof o?.text === "string" && o.text.trim().length > 0)
+        .map((o: any) => ({ text: o.text.trim(), rationale: String(o?.rationale ?? "").trim() }));
+      if (items.length) return items.slice(0, k);
+    }
+  }
+
+  // 2) Skús posledný JSON zoznam hranatých zátvoriek v texte
+  // Nájdeme poslednú ']' a hľadáme najbližšiu '[' pred ňou; iterujeme späť
+  let endIdx = cleaned.lastIndexOf(']');
+  while (endIdx >= 0) {
+    let startIdx = cleaned.lastIndexOf('[', endIdx);
+    while (startIdx >= 0) {
+      const slice = cleaned.slice(startIdx, endIdx + 1);
+      const arr = tryParseJsonArray(slice);
+      if (arr && arr.length) {
+        const items: StepProposal[] = arr
+          .filter((o: any) => typeof o?.text === "string" && o.text.trim().length > 0)
+          .map((o: any) => ({ text: o.text.trim(), rationale: String(o?.rationale ?? "").trim() }));
+        if (items.length) return items.slice(0, k);
+      }
+      startIdx = cleaned.lastIndexOf('[', startIdx - 1);
+    }
+    endIdx = cleaned.lastIndexOf(']', endIdx - 1);
+  }
+
+  return [];
+}
+
 export function initializeScratchpad(task: string): State {
   return {
     task,
@@ -76,6 +130,10 @@ export async function generateCandidateSteps(
   try {
     const raw = await sampler(prompt, maxTokens ?? 800);
     if (!raw) throw new Error("Empty LLM response");
+    // 1) Skús robustnú extrakciu s preferenciou posledného JSONu
+    const robust = extractProposalsFromRaw(raw, numCandidates);
+    if (robust.length > 0) return robust;
+    // 2) Pôvodný jednoduchý parser (fallback)
     const jsonStart = raw.indexOf("[");
     const jsonEnd = raw.lastIndexOf("]");
     const jsonText = jsonStart >= 0 && jsonEnd >= 0 ? raw.slice(jsonStart, jsonEnd + 1) : raw;
@@ -85,10 +143,14 @@ export async function generateCandidateSteps(
       .map(o => ({ text: o.text.trim(), rationale: (o.rationale ?? "").trim() }));
     if (proposals.length > 0) return proposals.slice(0, numCandidates);
   } catch {
-    // Try to parse free-form prose into structured steps
+    // Try to parse the same response (no re-sampling) as prose
     try {
-      const raw = sampler ? await sampler(prompt, maxTokens ?? 800) : null;
-      const proposals = parseProseToProposals(raw ?? "", numCandidates);
+      // We do not have access to the first raw here; re-querying would double token usage.
+      // Therefore, we perform a minimal second attempt only if sampler returns quickly.
+      const raw2 = await sampler(prompt, (maxTokens ?? 800) / 4);
+      const proposals = extractProposalsFromRaw(raw2 ?? "", numCandidates).length
+        ? extractProposalsFromRaw(raw2 ?? "", numCandidates)
+        : parseProseToProposals(raw2 ?? "", numCandidates);
       if (proposals.length > 0) return proposals.slice(0, numCandidates);
     } catch {
       // ignore and fall through
