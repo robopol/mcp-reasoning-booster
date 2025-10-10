@@ -80,6 +80,7 @@ Notes:
 - On every `tools/call` for `solve`, the PRIMARY result is returned inline in the MCP response under `content[0].text` as a JSON string. Your agent MUST parse this JSON to proceed.
 - Do not rely on console logs or non‑JSON text; always parse the JSON from the `content` array.
 - When `outputPath` is provided, the server writes the SAME payload to the specified file, but your agent should still parse the inline JSON it already received.
+- Guarantee for `solve`: the payload always includes `arbiterPicks` and `lastRawResponse` alongside the primary fields.
 - Typical shape of the parsed JSON:
   - `sessionId`: string
   - `summary`: short text summary
@@ -183,7 +184,7 @@ npx --yes tsx tests\demo_sampling.ts --multi-round --task "Plan a 3-step experim
 
 - Primary output: Always parse the JSON string from the MCP response `content[0].text`. File saving via `outputPath` is optional.
 - Strong models: increase `numCandidates`, `samplingMaxTokens`; enable a short beam. Use `llmMaxCalls` to cap budget.
-- Hints: Provide `seedHints` at start; provide `addHints` between rounds with 3–5 concise, verifiable ideas (each should include a concrete `how_to_verify`).
+- Hints: Provide `seedHints` at start; provide `addHints` between rounds with 3–5 concise, verifiable ideas (each should include a concrete `howToVerify`).
 
 - One‑shot (preferred when you do not need manual steering):
 ```json
@@ -212,7 +213,7 @@ npx --yes tsx tests\demo_sampling.ts --multi-round --task "Plan a 3-step experim
   - `steps`: applied steps with text/rationale/howToVerify/score.
   - `hints`: globally promoted ideas to prefer across branches.
   - `diagnostics`: provider/model info and sampling metadata.
-  - When using `solve`, the payload may include `arbiterPicks` (decisive sentences from raw LLM prose) and `lastRawResponse` for full auditing.
+  - When using `solve`, the payload includes `arbiterPicks` (decisive sentences from raw LLM prose) and `lastRawResponse` for full auditing.
 
 ### Using stronger advisors (providers)
 
@@ -327,21 +328,22 @@ If your CLI supports direct "tools/call", pass the payload above; otherwise ask 
 The booster is an idea generator, not the final answer. The AI agent (you) is the arbiter: you read the JSON output, select and compose the best micro‑steps, and produce the final solution.
 
 ### What the booster provides
-- **Micro‑steps**: short, actionable suggestions (<= 200 chars) with rationale and optional `how_to_verify`.
+- **Micro‑steps**: short, actionable suggestions (<= 200 chars) with rationale and optional `howToVerify`.
 - **Scoring**: heuristic scores for step quality (information gain, novelty vs. history, weak consistency). Treat scores as signals, not ground truth.
 - **Diagnostics**: proof that an LLM was called when available (`diagnostics.provider`, `lastModel`, `rawSamples`).
 - **Robust parsing**: prose‑to‑JSON extraction and `<think>...</think>` removal; if JSON is poor, fallback heuristics still return useful, verifiable steps.
+- **Arbiter visibility**: for `solve`, `arbiterPicks` and `lastRawResponse` are always included in the returned JSON.
 
 ### Your workflow (recommended)
 1) Call `solve` with a clear task and a small number of iterations (e.g., 6–10). Optionally set `numCandidates` 5–7.
 2) Parse the returned JSON; look at `steps` and `diagnostics`.
-3) Pick 1–2 best steps (you decide), prefer those with concrete `how_to_verify` and clear information gain. Ignore placeholders/meta.
+3) Pick 1–2 best steps (you decide), prefer those with concrete `howToVerify` and clear information gain. Ignore placeholders/meta.
 4) Apply the chosen ideas in your own reasoning; if helpful, call `step` to get the next set of ideas, or re‑`solve` with a refined task.
 5) Synthesize the final answer yourself. The booster is a generator of ideas; you compose and conclude.
 
 ### How to read steps
 - **text**: must be an actionable micro‑step, domain‑agnostic (e.g., "Weigh 1,2,3 vs 4,5,6", "Design a quick experiment that isolates one factor", "Check a blocking constraint").
-- **how_to_verify** (preferred): a concrete, local check (e.g., an outcome rule, a measurement, a pass/fail criterion).
+- **howToVerify** (preferred): a concrete, local check (e.g., an outcome rule, a measurement, a pass/fail criterion).
 - **rationale**: brief “why now”.
 - **score.totalScore**: use as a hint; you can still pick a lower‑scored idea if it is better for your specific task.
 
@@ -351,7 +353,7 @@ The booster is an idea generator, not the final answer. The AI agent (you) is th
 
 ### Beam search and cross‑branch idea sharing (hints)
 - The booster can run a short beam. Budget is distributed via UCB (Upper Confidence Bound): branches with better cumulative score get more expansions while still exploring others.
-- Cross‑branch sharing: when a branch generates high‑scoring, verifiable micro‑steps (with `how_to_verify`), they are promoted into `state.hints`. Other branches get a slight score boost if their candidates overlap with these hints, encouraging reuse of proven sub‑ideas without forcing convergence.
+- Cross‑branch sharing: when a branch generates high‑scoring, verifiable micro‑steps (with `howToVerify`), they are promoted into `state.hints`. Other branches get a slight score boost if their candidates overlap with these hints, encouraging reuse of proven sub‑ideas without forcing convergence.
 - Hints are capped (recent ~20) and deduplicated by similarity to keep diversity.
 - Effect in practice: good local tests propagate across branches; weak or meta steps don’t spread.
 
@@ -363,13 +365,13 @@ The booster is an idea generator, not the final answer. The AI agent (you) is th
 
 ### When output isn’t clean JSON
 - The server strips `<think>` blocks and extracts the last JSON block if present.
-- If only prose is returned, it parses numbered/bulleted lists into steps and captures `how_to_verify` when possible.
+- If only prose is returned, it parses numbered/bulleted lists into steps and captures `howToVerify` when possible.
 - If content is still weak, heuristics generate diversified, domain‑agnostic actions with verification hooks.
 
 ### Quality guardrails used by the booster
 - JSON‑first request with explicit fields; meta‑phrases are discouraged and filtered.
 - Preference for novelty vs. history; deduplication and loop/stagnation checks.
-- Bonus for steps with `how_to_verify`; length bounds to keep actions small/local.
+- Bonus for steps with `howToVerify`; length bounds to keep actions small/local.
 
 ### Minimal examples (agent‑side usage)
 - **One‑shot idea generation**
@@ -385,7 +387,7 @@ The booster is an idea generator, not the final answer. The AI agent (you) is th
   }
 }
 ```
-Then, from `steps`, pick 1–2 with the clearest `how_to_verify` to drive your answer.
+Then, from `steps`, pick 1–2 with the clearest `howToVerify` to drive your answer.
 
 - **Refine with multi‑step** (optional)
   - Start with `start` → use returned `sessionId`.
@@ -462,7 +464,7 @@ Minimal tool call payload (what the client sends under the hood):
 | multi-step  | `{ sessionId, iterations, overrideNumCandidates?, addHints? }`                          | `{ state }`                                                         |
 | get-state   | `{ sessionId }`                                                                         | full session object (JSON)                                         |
 | summarize   | `{ sessionId }`                                                                         | plain text summary (note: summary is not JSON)                     |
-| solve       | `{ task, iterations?, config?, seedHints?, outputPath?, outputFormat? }`                | `{ sessionId, summary, steps, hints, config, diagnostics, ... }`   |
+| solve       | `{ task, iterations?, config?, seedHints?, outputPath?, outputFormat? }`                | `{ sessionId, summary, steps, hints, config, diagnostics, arbiterPicks, lastRawResponse }` |
 | usage       | `{ topic? }`                                                                            | quick how‑to JSON (contract + tool examples)                       |
 
 ### Notes
