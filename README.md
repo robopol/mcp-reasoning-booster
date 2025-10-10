@@ -59,11 +59,11 @@ npx tsx tests/demo_sampling.ts --task 'Plan a 3-step experiment to test if X cau
 ```
 
 Notes:
-- The MCP server returns the PRIMARY JSON inline; the demo aj zapisuje kópiu do `demo-summary.json`.
-- Sampling režimy v deme:
-  - default: sampling OFF (server použije HTTP provider, ak sú kľúče, inak heuristiku)
-  - `--sampling=mock`: lokálny mock sampler (offline)
-  - `--sampling=shell --sampler="<your-cli --stdin>"`: shell‑bridge na tvoj CLI model (stdin → stdout)
+- The MCP server returns the PRIMARY JSON inline; the demo also writes a copy to `demo-summary.json`.
+- Demo sampling modes:
+  - default: sampling OFF (server uses HTTP provider if keys are present; otherwise heuristic)
+  - `--sampling=mock`: local mock sampler (offline)
+  - `--sampling=shell --sampler="<your-cli --stdin>"`: shell‑bridge to your CLI model (stdin → stdout)
 
 ### AI usage (for MCP-enabled agents)
 
