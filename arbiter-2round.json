@@ -1,0 +1,78 @@
+{
+  "sessionId": "ses_mgj8kb31_5yqp99",
+  "summary": "Summary:\nTask: Plan a three-sprint MVP for scheduling feature with measurable outcomes.\n- Set Sprint 2 outcome: 85%+ task completion rate in 5-user usability test for editing.\n- Check a constraint/assumption blocking progress.\nOutcome branches:\n  -> Outcomes: >=85% complete | <85% complete",
+  "steps": [
+    {
+      "index": 0,
+      "text": "Set Sprint 2 outcome: 85%+ task completion rate in 5-user usability test for editing.",
+      "rationale": "Measures real-user effectiveness of new interaction patterns.",
+      "howToVerify": "Conduct moderated test; calculate completion rate from session recordings.",
+      "expectedOutcomes": [
+        {
+          "label": ">=85% complete"
+        },
+        {
+          "label": "<85% complete"
+        }
+      ],
+      "score": {
+        "rulesScore": 1.2699999999999998,
+        "redundancyScore": 0.05,
+        "consistencyScore": 0.05,
+        "totalScore": 0.7819999999999998,
+        "entropyBoost": 0.12,
+        "voi": 0.12,
+        "cost": 1
+      },
+      "voi": 0.12,
+      "ig": 0.12,
+      "cost": 1
+    },
+    {
+      "index": 1,
+      "text": "Check a constraint/assumption blocking progress.",
+      "rationale": "Invalid assumptions stall reasoning.",
+      "howToVerify": "Find concrete counterexample or confirm with a minimal test.",
+      "score": {
+        "rulesScore": 0.98,
+        "redundancyScore": 0.1,
+        "consistencyScore": 0.05,
+        "totalScore": 0.6204999999999999,
+        "entropyBoost": 0,
+        "voi": 0,
+        "cost": 1
+      },
+      "voi": 0,
+      "ig": 0,
+      "cost": 1
+    }
+  ],
+  "hints": [
+    "Set Sprint 2 outcome: 85%+ task completion rate in 5-user usability test for editing.",
+    "Final step: Approve consolidated sprint plan with stakeholders via signed document.",
+    "Set Sprint 1 outcome: 100% success rate in automated tests for event creation.",
+    "Check a constraint/assumption blocking progress.",
+    "Record the outcome and update the suspect/option set.",
+    "Compare two small alternatives; pick one by a clear rule.",
+    "Define one measurable subgoal and the success criterion.",
+    "Design a quick experiment that isolates one factor."
+  ],
+  "config": {
+    "maxSteps": 16,
+    "numCandidates": 7,
+    "topM": 2,
+    "allowBacktrack": true,
+    "wRules": 0.6,
+    "wRedundancy": 0.25,
+    "wConsistency": 0.15,
+    "useSampling": true,
+    "samplingMaxTokens": 2000,
+    "minImprovement": 0.01,
+    "beamWidth": 2,
+    "beamDepth": 2,
+    "llmMaxCalls": 8,
+    "resampleOnParseFailure": false,
+    "voiAlpha": 0.5,
+    "executeVerification": false
+  }
+}

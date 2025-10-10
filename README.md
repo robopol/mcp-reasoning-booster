@@ -61,9 +61,18 @@ Notes:
   }
 }
 ```
-- Expected result (primary): the MCP response’s `content[0].text` contains a JSON string with:
+- Expected result (primary): the MCP response’s `content[0].text` contains a JSON string with (fields may vary slightly by tool):
 ```json
-{ "sessionId": "ses_xxx", "summary": "Summary: ...", "steps": [ { "index": 0, "text": "..." } ], "config": { ... } }
+{
+  "sessionId": "ses_xxx",
+  "summary": "Summary: ...",
+  "steps": [ { "index": 0, "text": "...", "rationale": "...", "howToVerify": "..." } ],
+  "hints": ["..."],
+  "config": { ... },
+  "diagnostics": { "provider": "...", "lastModel": "..." },
+  "arbiterPicks": ["..."],
+  "lastRawResponse": "..."
+}
 ```
 - Optional server-side file output: If `outputPath` is provided, the server also writes the result to disk. `outputFormat`: "json" (default) or "text" (summary only). This is optional; clients should primarily read the JSON returned in the MCP response.
 
@@ -75,13 +84,163 @@ Notes:
   - `sessionId`: string
   - `summary`: short text summary
   - `steps`: array of steps `{ index, text, rationale, howToVerify?, expectedOutcomes?, score? }`
+  - `hints`: promoted cross‑branch ideas (string[])
   - `config`: effective booster config
   - `diagnostics`: sampler info (e.g., provider, lastModel, rawSamples)
+  - `arbiterPicks`: decisive sentences extracted from raw LLM prose (solve)
+  - `lastRawResponse`: full raw text of the last LLM response (solve)
+
+### Verification contract and VoI (new)
+
+- Steps may include a structured `verification` block:
+```json
+{
+  "text": "Weigh 4 vs 4.",
+  "rationale": "Maximize info",
+  "verification": {
+    "kind": "weighing",
+    "procedure": "Place coins A,B,C,D vs E,F,G,H",
+    "outcomes": [
+      { "label": "balance", "rule": "no difference", "stateUpdate": "narrow outside compared sets" },
+      { "label": "left", "rule": "left heavier or right lighter" },
+      { "label": "right", "rule": "right heavier or left lighter" }
+    ],
+    "cost": 1,
+    "logFields": ["leftSet","rightSet","tilt"]
+  }
+}
+```
+
+- The verifier prioritizes steps with multiple distinguishable outcomes (information gain). We compute an entropy‑like IG and **Value‑of‑Information (VoI) = IG/(1+cost)**. Beam selection uses a VoI‑aware UCB.
+
+### New config fields
+
+- `voiAlpha` (default 0.5): weight of the VoI prior in UCB beam selection.
+- `executeVerification` (default false): if true, the recommended `verification.outcomes[*].stateUpdate` and `logFields` are recorded in `state.uncertainty`.
+- `samplingMaxTokens` (default 2000): max tokens per LLM response (raw). Increase if raw responses get truncated; reduce to save tokens.
+- `llmMaxCalls` (default 8): hard budget of total LLM calls during a run.
+- `resampleOnParseFailure` (default false): allows one stricter resample when parsing fails (use sparingly to control token spend).
 
 - Policy for agents:
   - Prefer `solve` (one shot). If more refinement is needed, optionally call `step` with `{ "sessionId": "...", "overrideNumCandidates": 7 }` then `summarize`.
   - If client does not support sampling, omit `useSampling`; server falls back to heuristic proposals.
   - On stagnation, increase `iterations` to 12 or `numCandidates` to 7–9.
+
+### Multi-round (sessions) + arbiter hints (new)
+
+- Start a session and seed initial hints chosen by the arbiter:
+```json
+{
+  "name": "start",
+  "arguments": {
+    "task": "Decompose product launch plan into validated next actions.",
+    "config": { "useSampling": true, "numCandidates": 7, "topM": 2, "beamWidth": 2, "beamDepth": 2 },
+    "seedHints": [
+      "Define one measurable subgoal and the success criterion.",
+      "Design a quick experiment that isolates one factor."
+    ]
+  }
+}
+```
+
+- Run multiple iterations and promote new hints between rounds:
+```json
+{
+  "name": "multi-step",
+  "arguments": {
+    "sessionId": "ses_...",
+    "iterations": 3,
+    "overrideNumCandidates": 7,
+    "addHints": [
+      "Compare two small alternatives; pick one by a clear rule.",
+      "Record the outcome and update the option set."
+    ]
+  }
+}
+```
+
+- One‑shot with initial hints (no manual stepping):
+```json
+{
+  "name": "solve",
+  "arguments": {
+    "task": "Plan a household monthly budget...",
+    "iterations": 10,
+    "config": { "useSampling": true, "numCandidates": 7, "topM": 2 },
+    "seedHints": ["Categorize fixed vs variable costs", "Set savings goal first"],
+    "outputPath": "./summary.json",
+    "outputFormat": "json"
+  }
+}
+```
+
+- Terminal demo (multi‑round):
+```bash
+npx --yes tsx tests\demo_sampling.ts --multi-round --task "Plan a 3-step experiment to test if X causes Y under constraint Z."
+```
+
+### Cheat‑sheet for AI agents (copy/paste)
+
+- Primary output: Always parse the JSON string from the MCP response `content[0].text`. File saving via `outputPath` is optional.
+- Strong models: increase `numCandidates`, `samplingMaxTokens`; enable a short beam. Use `llmMaxCalls` to cap budget.
+- Hints: Provide `seedHints` at start; provide `addHints` between rounds with 3–5 concise, verifiable ideas (each should include a concrete `how_to_verify`).
+
+- One‑shot (preferred when you do not need manual steering):
+```json
+{
+  "name": "solve",
+  "arguments": {
+    "task": "Hard problem (succinct).",
+    "iterations": 10,
+    "config": { "useSampling": true, "numCandidates": 8, "beamWidth": 2, "beamDepth": 2, "samplingMaxTokens": 3000, "minImprovement": 0.02, "llmMaxCalls": 16 },
+    "seedHints": ["Define one measurable subgoal and the success criterion.", "Design a quick experiment that isolates one factor."],
+    "outputPath": "./summary.json",
+    "outputFormat": "json"
+  }
+}
+```
+
+- Multi‑round (you act as the arbiter):
+```json
+{ "name": "start", "arguments": { "task": "Hard problem (succinct).", "config": { "useSampling": true, "numCandidates": 8, "beamWidth": 2, "beamDepth": 2 }, "seedHints": ["Hint A","Hint B"] } }
+{ "name": "step",  "arguments": { "sessionId": "ses_...", "overrideNumCandidates": 8 } }
+{ "name": "step",  "arguments": { "sessionId": "ses_...", "overrideNumCandidates": 8, "addHints": ["Promoted Hint 1","Promoted Hint 2"] } }
+{ "name": "summarize", "arguments": { "sessionId": "ses_..." } }
+```
+
+- Reading results (what to extract from JSON):
+  - `steps`: applied steps with text/rationale/howToVerify/score.
+  - `hints`: globally promoted ideas to prefer across branches.
+  - `diagnostics`: provider/model info and sampling metadata.
+  - When using `solve`, the payload may include `arbiterPicks` (decisive sentences from raw LLM prose) and `lastRawResponse` for full auditing.
+
+### Using stronger advisors (providers)
+
+- Put keys into `mcp-reasoning-booster/secrets.local.txt` (or environment):
+```
+CEREBRAS_API_KEY=...
+CEREBRAS_MODEL=qwen2.5-72b-instruct
+CEREBRAS_BASE_URL=https://api.cerebras.ai/v1
+# Optional OpenAI
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-4o-mini
+OPENAI_BASE_URL=https://api.openai.com/v1
+```
+- Suggested config for strong models: `numCandidates: 7–9`, `samplingMaxTokens: 2000–4000`, `beamWidth: 2`, `beamDepth: 2`, `minImprovement: 0.01–0.03`, `llmMaxCalls: 12–24`, `voiAlpha: 0.5–0.8`.
+- You can run separate sessions with different providers and merge their best ideas into the next session’s `seedHints`.
+
+### Arbiter workflow recipe for hard tasks
+
+1) Start with concise task + `seedHints` (2–3 crisp, verifiable ideas).
+2) Run one `step`; as the arbiter, pick 3–5 best candidates that have a concrete `how_to_verify` and clear information gain.
+3) Provide them as `addHints` for the next `step` or `multi-step` call to propagate across branches.
+4) Repeat until you reach a unique conclusion or a decisive test; the last step may be a "Final step:". If not, synthesize the final answer from the best steps.
+
+### Troubleshooting quick checks
+
+- If responses are truncated: increase `samplingMaxTokens` (e.g., 3000) and keep prompts concise.
+- If steps are too meta or repetitive: lower `numCandidates` or raise `minImprovement`; promote better hints (`addHints`).
+- If budget is tight: reduce `iterations` and set `llmMaxCalls` to a safe cap; rely more on `seedHints`/`addHints`.
 
 ### Provider selection order (automatic)
 
@@ -92,7 +251,7 @@ The server chooses how to generate candidates in this priority order:
      ````
      # Cerebras
      CEREBRAS_API_KEY=...
-     CEREBRAS_MODEL=qwen-3-235b-a22b-thinking-2507
+     CEREBRAS_MODEL=qwen2.5-72b-instruct
      CEREBRAS_BASE_URL=https://api.cerebras.ai/v1
 
      # (Optional) OpenAI
@@ -277,19 +436,34 @@ Minimal tool call payload (what the client sends under the hood):
 ### Tools
 
 - **start**: initialize a session
-  - input: `{ task: string, config?: { maxSteps?, numCandidates?, topM?, allowBacktrack?, wRules?, wRedundancy?, wConsistency?, useSampling?, samplingMaxTokens? } }`
+  - input: `{ task: string, config?: { ... }, seedHints?: string[] }`
   - returns: `sessionId` plus initial `state` and effective `config`
 - **step**: run one iteration (Best‑of‑N → scoring → apply → meta‑control)
-  - input: `{ sessionId: string, overrideNumCandidates?: number }`
+  - input: `{ sessionId: string, overrideNumCandidates?: number, addHints?: string[] }`
   - returns: `chosen`, `candidates` and updated `state`
 - **get-state**: return the current session state
   - input: `{ sessionId: string }`
 - **summarize**: produce a short summary from the scratchpad
   - input: `{ sessionId: string }`
  - **multi-step**: run multiple iterations in a single call
-  - input: `{ sessionId: string, iterations: number, overrideNumCandidates?: number }`
+  - input: `{ sessionId: string, iterations: number, overrideNumCandidates?: number, addHints?: string[] }`
  - **solve**: one-shot run (start → N iterations → summarize)
-  - input: `{ task: string, iterations?: number, config?: { ...same as start } }`
+  - input: `{ task: string, iterations?: number, config?: { ... }, seedHints?: string[] }`
+ - **usage**: quick how‑to/contract as JSON (copy/paste)
+  - input: `{ topic?: string }`
+  - returns: concise contract, tool map, and examples in PRIMARY JSON
+
+### API map (at a glance)
+
+| Tool        | Inputs                                                                                 | Primary output (parse JSON from `content[0].text`)                 |
+|-------------|-----------------------------------------------------------------------------------------|--------------------------------------------------------------------|
+| start       | `{ task, config?, seedHints? }`                                                         | `{ sessionId, state, config }`                                     |
+| step        | `{ sessionId, overrideNumCandidates?, addHints? }`                                      | `{ chosen, candidates, state }`                                    |
+| multi-step  | `{ sessionId, iterations, overrideNumCandidates?, addHints? }`                          | `{ state }`                                                         |
+| get-state   | `{ sessionId }`                                                                         | full session object (JSON)                                         |
+| summarize   | `{ sessionId }`                                                                         | plain text summary (note: summary is not JSON)                     |
+| solve       | `{ task, iterations?, config?, seedHints?, outputPath?, outputFormat? }`                | `{ sessionId, summary, steps, hints, config, diagnostics, ... }`   |
+| usage       | `{ topic? }`                                                                            | quick how‑to JSON (contract + tool examples)                       |
 
 ### Notes
 
