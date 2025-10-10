@@ -33,35 +33,7 @@ function extractJson<T>(content: ToolContent[]): T | null {
 
 async function run() {
   const transport = new StdioClientTransport({ command: "node", args: ["dist/index.js"] });
-  const client = new Client({ name: "rb-demo", version: "0.1.0" }, { capabilities: { tools: {}, prompts: {}, resources: {}, sampling: {} } });
 
-  // Provide a trivial sampling handler that emits JSON proposals per server instruction
-  client.setRequestHandler(CreateMessageRequestSchema, async (request) => {
-    const userMsg = request.params?.messages?.find(m => m.role === "user");
-    const text = (userMsg as any)?.content?.text as string | undefined;
-    const match = text?.match(/(?:Output|Return)\s+exactly\s+(\d+)/i);
-    const k = Math.max(1, Math.min(8, Number(match?.[1] ?? 5)));
-    const templates = [
-      "State a small lemma that reduces the goal.",
-      "Check a local invariant implied by assumptions.",
-      "Split the goal into two simpler subgoals.",
-      "Rephrase the claim in an equivalent form.",
-      "Eliminate an implausible branch via a counterexample sketch.",
-    ];
-    const items = Array.from({ length: k }, (_, i) => ({
-      text: templates[i % templates.length],
-      rationale: "Sampling mock: concise next step"
-    }));
-    return {
-      model: "demo-mock",
-      role: "assistant",
-      content: { type: "text", text: JSON.stringify(items) }
-    } as any;
-  });
-
-  await client.connect(transport);
-
-  // One-shot solve (simplest demo) or multi-round session demo
   function getArg(flag: string): string | undefined {
     const argv: string[] = ((globalThis as any).process?.argv ?? []) as string[];
     for (let i = 0; i < argv.length; i++) {
@@ -71,6 +43,83 @@ async function run() {
       if (a.startsWith(eq)) return a.slice(eq.length);
     }
     return undefined;
+  }
+
+  // Sampling mode: "mock" enables a local mock sampler; otherwise no sampling is advertised
+  const samplingArg = getArg("--sampling") || ((globalThis as any).process?.env?.SAMPLING_MODE as string | undefined);
+  const samplingMode = (samplingArg === "mock") ? "mock" : (samplingArg === "shell" ? "shell" : "off");
+  const samplerCmd = getArg("--sampler") || ((globalThis as any).process?.env?.SAMPLER_CMD as string | undefined);
+  const samplerTimeoutMs = Number(getArg("--sampler-timeout-ms") ?? ((globalThis as any).process?.env?.SAMPLER_TIMEOUT_MS as string | undefined) ?? 120000);
+
+  const caps: any = { tools: {}, prompts: {}, resources: {} };
+  if (samplingMode !== "off") caps.sampling = {};
+  const client = new Client({ name: "rb-demo", version: "0.1.0" }, { capabilities: caps });
+
+  if (samplingMode === "mock" || samplingMode === "shell") {
+    // Provide a trivial sampling handler that emits JSON proposals per server instruction
+    client.setRequestHandler(CreateMessageRequestSchema, async (request) => {
+      const userMsg = request.params?.messages?.find(m => m.role === "user");
+      const text = (userMsg as any)?.content?.text as string | undefined;
+      if (samplingMode === "mock") {
+        const match = text?.match(/(?:Output|Return)\s+exactly\s+(\d+)/i);
+        const k = Math.max(1, Math.min(8, Number(match?.[1] ?? 5)));
+        const templates = [
+          "State a small lemma that reduces the goal.",
+          "Check a local invariant implied by assumptions.",
+          "Split the goal into two simpler subgoals.",
+          "Rephrase the claim in an equivalent form.",
+          "Eliminate an implausible branch via a counterexample sketch.",
+        ];
+        const items = Array.from({ length: k }, (_, i) => ({
+          text: templates[i % templates.length],
+          rationale: "Sampling mock: concise next step"
+        }));
+        return {
+          model: "demo-mock",
+          role: "assistant",
+          content: { type: "text", text: JSON.stringify(items) }
+        } as any;
+      }
+      // shell bridge mode: call external CLI that reads prompt on stdin and returns text on stdout
+      if (!samplerCmd || samplerCmd.trim().length === 0) {
+        throw new Error("--sampler (or SAMPLER_CMD) must be provided in --sampling=shell mode");
+      }
+      const output = await new Promise<string>(async (resolve, reject) => {
+        let cpMod: any;
+        try { cpMod = await (new Function("return import('child_process')"))(); } catch {}
+        const spawn = cpMod?.spawn as any;
+        if (!spawn) return reject(new Error("child_process.spawn unavailable"));
+        const child = spawn(samplerCmd, { shell: true });
+        let stdout = "";
+        let stderr = "";
+        const to = setTimeout(() => {
+          try { child.kill("SIGKILL"); } catch {}
+          reject(new Error("sampler timeout"));
+        }, Math.max(1000, samplerTimeoutMs));
+        child.stdout.on("data", (d) => { stdout += d.toString(); });
+        child.stderr.on("data", (d) => { stderr += d.toString(); });
+        child.on("error", (err) => { clearTimeout(to); reject(err); });
+        child.on("close", (code) => { clearTimeout(to); if (code === 0) resolve(stdout); else reject(new Error(`sampler exit ${code}: ${stderr || stdout}`)); });
+        try {
+          child.stdin.write(text ?? "");
+          child.stdin.end();
+        } catch {}
+      });
+      return {
+        model: `shell:${samplerCmd.split(" ")[0]}`,
+        role: "assistant",
+        content: { type: "text", text: output }
+      } as any;
+    });
+  }
+
+  await client.connect(transport);
+
+  // One-shot solve (simplest demo) or multi-round session demo
+  if (samplingMode === "shell") {
+    console.log(`DEMO sampling mode: shell -> ${samplerCmd}`);
+  } else {
+    console.log(`DEMO sampling mode: ${samplingMode}`);
   }
   function hasFlag(flag: string): boolean {
     const argv: string[] = ((globalThis as any).process?.argv ?? []) as string[];
