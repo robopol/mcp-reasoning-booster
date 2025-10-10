@@ -2,6 +2,24 @@
 
 An MCP server that implements a minimal, domain‑agnostic "reasoning booster" pipeline: it iteratively generates candidate micro‑steps (optional LLM sampling via MCP; otherwise diversified fallbacks), scores them with a verifier, applies the best step, and finally returns a concise summary.
 
+### TL;DR (usage‑first)
+
+- Install & build:
+  ```bash
+  cd mcp-reasoning-booster
+  npm install && npm run build
+  ```
+- Call once (one‑shot): send a `tools/call` for `solve` and parse the JSON from the MCP response `content[0].text`.
+  ```json
+  { "name": "solve", "arguments": { "task": "your task", "iterations": 8, "config": { "useSampling": true, "numCandidates": 5 } } }
+  ```
+- Where to read results: the JSON string in `content[0].text` (always includes `arbiterPicks` and `lastRawResponse` for `solve`).
+- Sampling options (pick one):
+  1) Direct HTTP (Cerebras/OpenAI) via keys in `secrets.local.txt`
+  2) MCP sampling via your client (client must expose `sampling`)
+  3) Shell‑bridge (use your local CLI model) via demo: `--sampling=shell --sampler="<your-cli --stdin>"`
+- Multi‑round: use `start` → `multi-step`/`step` (with `seedHints`/`addHints`) → `summarize`.
+
 ### Installation
 
 ```bash
@@ -41,8 +59,11 @@ npx tsx tests/demo_sampling.ts --task 'Plan a 3-step experiment to test if X cau
 ```
 
 Notes:
-- The demo script accepts only `--task` (no env vars needed). This avoids quoting issues.
-- The MCP server returns the PRIMARY JSON inline; the demo also writes a copy to `demo-summary.json` via `outputPath`.
+- The MCP server returns the PRIMARY JSON inline; the demo aj zapisuje kópiu do `demo-summary.json`.
+- Sampling režimy v deme:
+  - default: sampling OFF (server použije HTTP provider, ak sú kľúče, inak heuristiku)
+  - `--sampling=mock`: lokálny mock sampler (offline)
+  - `--sampling=shell --sampler="<your-cli --stdin>"`: shell‑bridge na tvoj CLI model (stdin → stdout)
 
 ### AI usage (for MCP-enabled agents)
 
@@ -177,7 +198,11 @@ Notes:
 
 - Terminal demo (multi‑round):
 ```bash
+# By default, the demo does NOT advertise sampling to the server (so the server will use direct HTTP or fallback heuristics).
+# To enable the local mock sampler (for offline testing), add: --sampling=mock
 npx --yes tsx tests\demo_sampling.ts --multi-round --task "Plan a 3-step experiment to test if X causes Y under constraint Z."
+# or with mock sampler:
+npx --yes tsx tests\demo_sampling.ts --multi-round --sampling=mock --task "Plan a 3-step experiment to test if X causes Y under constraint Z."
 ```
 
 ### Cheat‑sheet for AI agents (copy/paste)
@@ -399,41 +424,9 @@ Then, from `steps`, pick 1–2 with the clearest `howToVerify` to drive your ans
 - Downrank steps that: restate the task, are vague, or duplicate previous steps.
 - Use `diagnostics.rawSamples` if you need to audit what the model actually saw and returned.
 
-#### Claude CLI/Desktop (MCP sampling)
+#### MCP client note (sampling)
 
-If you use Claude CLI/Desktop with MCP enabled, add the server to its config so the client exposes the sampling capability to our server.
-
-Example `claude.config.json` (path depends on platform):
-
-```json
-{
-  "mcpServers": {
-    "reasoning-booster": {
-      "command": "node",
-      "args": ["./dist/index.js"],
-      "cwd": "./mcp-reasoning-booster"
-    }
-  }
-}
-```
-
-How to use inside Claude chat/session:
-
-- Ask Claude to call the `solve` tool with your task. The client will route the request via MCP and our server will use MCP sampling (no API keys needed). You should see `diagnostics.provider: "mcp"` and the client’s model in the JSON output.
-
-Minimal tool call payload (what the client sends under the hood):
-
-```json
-{
-  "name": "solve",
-  "arguments": {
-    "task": "your concrete task",
-    "iterations": 8,
-    "outputPath": "./summary.json",
-    "outputFormat": "json"
-  }
-}
-```
+Any MCP‑enabled client that exposes `sampling` can be used. Add this server under its `mcpServers` config and ask the client to call tool `solve`. In the returned JSON, check `diagnostics.provider: "mcp"` and `lastModel`.
 
 ### Tools
 
