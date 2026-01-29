@@ -2,9 +2,9 @@ import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { writeFile } from "node:fs/promises";
 import { resolve as pathResolve, join as pathJoin, isAbsolute as pathIsAbsolute } from "node:path";
 import { DefaultConfig, ReasoningConfig, Session, State, SamplerDiagnostics } from "../types.js";
-import { loadSamplerConfig } from "../config.js";
 import { createVerifier } from "../verifier.js";
-import { Sampler, initializeScratchpad, runOneIteration, summarizeSolution } from "../orchestrator.js";
+import { initializeScratchpad, runOneIteration, summarizeSolution } from "../orchestrator.js";
+import { createSampler, shouldEnableSampling } from "../sampling/sampler.js";
 import type { ToolDef } from "./toolRegistry.js";
 
 function makeSessionId(): string {
@@ -63,125 +63,6 @@ function mergeHints(existing: string[] | undefined, extras: unknown): string[] {
   return out;
 }
 
-async function directOpenAISample(prompt: string, maxTokens: number, diag?: SamplerDiagnostics): Promise<string | null> {
-  const cfg = loadSamplerConfig();
-  const apiKey = cfg.openaiApiKey;
-  if (!apiKey) return null;
-  const model = cfg.openaiModel || "gpt-4o-mini";
-  try {
-    const res = await fetch(cfg.openaiBaseUrl || "https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: Math.max(1, Math.min(16000, maxTokens)),
-        temperature: 0.2,
-      }),
-    });
-    if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}`);
-    const data: any = await res.json();
-    const text: string | undefined = data?.choices?.[0]?.message?.content;
-    if (diag) {
-      diag.provider = "direct-openai";
-      diag.totalCalls = (diag.totalCalls ?? 0) + 1;
-      diag.lastPromptChars = prompt?.length;
-      diag.lastResponseChars = text?.length;
-      diag.lastModel = model;
-      diag.lastOkAt = new Date().toISOString();
-      diag.rawSamples = diag.rawSamples || [];
-      diag.rawSamples.push({ prompt, response: text, model, provider: diag.provider, at: new Date().toISOString() });
-    }
-    return typeof text === "string" ? text : null;
-  } catch {
-    if (diag) diag.lastErrorAt = new Date().toISOString();
-    return null;
-  }
-}
-
-async function directCerebrasSample(prompt: string, maxTokens: number, diag?: SamplerDiagnostics): Promise<string | null> {
-  const cfg = loadSamplerConfig();
-  const apiKey = cfg.cerebrasApiKey;
-  if (!apiKey) return null;
-  const model = cfg.cerebrasModel;
-  if (!model) return null;
-  try {
-    const base = (cfg.cerebrasBaseUrl || "https://api.cerebras.ai/v1").replace(/\/$/, "");
-    const res = await fetch(base + "/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: Math.max(1, Math.min(16000, maxTokens)),
-        temperature: 0.2,
-      }),
-    });
-    if (!res.ok) throw new Error(`Cerebras HTTP ${res.status}`);
-    const data: any = await res.json();
-    const text: string | undefined = data?.choices?.[0]?.message?.content;
-    if (diag) {
-      diag.provider = "cerebras";
-      diag.totalCalls = (diag.totalCalls ?? 0) + 1;
-      diag.lastPromptChars = prompt?.length;
-      diag.lastResponseChars = text?.length;
-      diag.lastModel = model;
-      diag.lastOkAt = new Date().toISOString();
-      diag.rawSamples = diag.rawSamples || [];
-      diag.rawSamples.push({ prompt, response: text, model, provider: diag.provider, at: new Date().toISOString() });
-    }
-    return typeof text === "string" ? text : null;
-  } catch {
-    if (diag) diag.lastErrorAt = new Date().toISOString();
-    return null;
-  }
-}
-
-function getSampler(server: Server, diag?: SamplerDiagnostics): Sampler | undefined {
-  const cfg = loadSamplerConfig();
-  if (cfg.cerebrasApiKey && cfg.cerebrasModel) {
-    return async (prompt: string, maxTokens = 800) => directCerebrasSample(prompt, maxTokens, diag);
-  }
-  if (cfg.openaiApiKey) {
-    return async (prompt: string, maxTokens = 800) => directOpenAISample(prompt, maxTokens, diag);
-  }
-  return async (prompt: string, maxTokens = 800) => {
-    try {
-      const result: any = await (server as any).createMessage({
-        messages: [
-          { role: "user", content: { type: "text", text: prompt } }
-        ],
-        maxTokens,
-      });
-      if (diag) {
-        diag.provider = "mcp";
-        diag.totalCalls = (diag.totalCalls ?? 0) + 1;
-        diag.lastPromptChars = typeof prompt === "string" ? prompt.length : undefined;
-        const respText = result?.content?.type === "text" ? result?.content?.text : (typeof result?.content === "string" ? result.content : undefined);
-        diag.lastResponseChars = typeof respText === "string" ? respText.length : undefined;
-        diag.lastModel = typeof result?.model === "string" ? result.model : undefined;
-        diag.lastOkAt = new Date().toISOString();
-        diag.rawSamples = diag.rawSamples || [];
-        diag.rawSamples.push({ prompt, response: typeof respText === "string" ? respText : undefined, model: diag.lastModel, provider: diag.provider, at: new Date().toISOString() });
-      }
-      let textOut: string | undefined;
-      if (result?.content?.type === "text" && typeof result.content.text === "string") textOut = result.content.text as string;
-      else if (typeof result?.content === "string") textOut = result.content as string;
-      const cleaned = typeof textOut === "string" ? textOut.replace(/<think>[\s\S]*?<\/think>/gi, "").trim() : undefined;
-      return cleaned ?? textOut ?? null;
-    } catch {
-      if (diag) diag.lastErrorAt = new Date().toISOString();
-      return null;
-    }
-  };
-}
-
 export function registerTools(params: {
   server: Server;
   toolRegistry: Map<string, ToolDef>;
@@ -229,10 +110,7 @@ export function registerTools(params: {
       if (!task) throw new Error("Missing 'task'");
       const merged: ReasoningConfig = { ...DefaultConfig, ...(cfg ?? {}) };
       if (cfg?.useSampling === undefined) {
-        const samplerCfg = loadSamplerConfig();
-        const hasKeys = !!(samplerCfg.cerebrasApiKey || samplerCfg.openaiApiKey);
-        const caps = (server as any).getClientCapabilities?.();
-        if (hasKeys) merged.useSampling = true; else if (caps?.sampling) merged.useSampling = true;
+        if (shouldEnableSampling(server)) merged.useSampling = true;
       }
       const state: State = initializeScratchpad(task);
       state.hints = mergeHints(state.hints, (args as any).seedHints);
@@ -270,7 +148,7 @@ export function registerTools(params: {
         ...(overrideNumCandidates ? { numCandidates: overrideNumCandidates } : {})
       };
       const verifier = createVerifier(cfg);
-      const sampler = session.config.useSampling ? getSampler(server, session.diagnostics ?? (session.diagnostics = { totalCalls: 0 })) : undefined;
+      const sampler = session.config.useSampling ? createSampler(server, session.diagnostics ?? (session.diagnostics = { totalCalls: 0 })) : undefined;
       const { chosen, candidates, newState } = await runOneIteration(
         verifier,
         cfg,
@@ -306,7 +184,7 @@ export function registerTools(params: {
       const overrideNumCandidates = (args as any).overrideNumCandidates as number | undefined;
       const session = sessions.get(sessionId);
       if (!session) throw new Error(`Unknown sessionId: ${sessionId}`);
-      const sampler = session.config.useSampling ? getSampler(server, session.diagnostics ?? (session.diagnostics = { totalCalls: 0 })) : undefined;
+      const sampler = session.config.useSampling ? createSampler(server, session.diagnostics ?? (session.diagnostics = { totalCalls: 0 })) : undefined;
       session.state.hints = mergeHints(session.state.hints, (args as any).addHints);
       for (let i = 0; i < iterations; i++) {
         const cfg: ReasoningConfig = {
@@ -385,10 +263,7 @@ export function registerTools(params: {
       const cfg = (args as any).config as Partial<ReasoningConfig> | undefined;
       const merged: ReasoningConfig = { ...DefaultConfig, ...(cfg ?? {}) };
       if (cfg?.useSampling === undefined) {
-        const samplerCfg = loadSamplerConfig();
-        const hasKeys = !!(samplerCfg.cerebrasApiKey || samplerCfg.openaiApiKey);
-        const caps = (server as any).getClientCapabilities?.();
-        if (hasKeys) merged.useSampling = true; else if (caps?.sampling) merged.useSampling = true;
+        if (shouldEnableSampling(server)) merged.useSampling = true;
       }
 
       const state: State = initializeScratchpad(task);
@@ -397,7 +272,7 @@ export function registerTools(params: {
       const session: Session = { id, state, config: merged, history: [], diagnostics: { totalCalls: 0 } };
       sessions.set(id, session);
 
-      const sampler = merged.useSampling ? getSampler(server, session.diagnostics!) : undefined;
+      const sampler = merged.useSampling ? createSampler(server, session.diagnostics!) : undefined;
       const maxCalls = Math.max(0, merged.llmMaxCalls ?? 8);
       for (let i = 0; i < iterations; i++) {
         const verifier = createVerifier(merged);
