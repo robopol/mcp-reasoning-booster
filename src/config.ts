@@ -11,8 +11,13 @@ export interface SamplingConfig {
   cerebrasBaseUrl?: string;
 }
 
+export interface SessionStoreConfig {
+  kind?: "memory";
+}
+
 export interface AppConfig {
   sampling?: SamplingConfig;
+  sessionStore?: SessionStoreConfig;
 }
 
 function loadJson(path: string): any | undefined {
@@ -46,6 +51,22 @@ function loadSecrets(paths: string[]): Record<string, string> {
     }
   }
   return out;
+}
+
+export function loadAppConfig(): AppConfig {
+  // Try config.local.json, then config.json in current working directory
+  const cwd = process.cwd();
+  const local = join(cwd, "config.local.json");
+  const base = join(cwd, "config.json");
+  const a = loadJson(base) as AppConfig | undefined;
+  const b = loadJson(local) as AppConfig | undefined;
+  return { ...(a || {}), ...(b || {}) };
+}
+
+export function loadSessionStoreConfig(): SessionStoreConfig {
+  const cfg = loadAppConfig();
+  const kind = cfg?.sessionStore?.kind ?? "memory";
+  return { kind };
 }
 
 export function loadSamplerConfig(): SamplingConfig {

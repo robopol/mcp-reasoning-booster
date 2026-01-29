@@ -1,12 +1,13 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { loadSessionStoreConfig } from "./config.js";
 import { registerTools } from "./server/registerTools.js";
 import type { ToolDef } from "./server/toolRegistry.js";
-import { createInMemorySessionStore } from "./state/sessionStore.js";
+import { createSessionStoreFromConfig } from "./state/factory.js";
 
 const server = new Server({ name: "reasoning-booster", version: "0.1.0" }, { capabilities: { tools: {} } });
-const sessionStore = createInMemorySessionStore();
+const sessionStore = createSessionStoreFromConfig(loadSessionStoreConfig());
 const toolRegistry = new Map<string, ToolDef>();
 
 registerTools({ server, toolRegistry, sessionStore });

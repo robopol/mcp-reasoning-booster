@@ -14,3 +14,7 @@ config.local.json
 # Misc
 demo-raw.txt
 demo-summary.json
+
+# Local architecture notes (keep local, don't push)
+BRAIN_ARCHITECTURE_PLAN.md
+BRAIN_ARCHITECTURE_PLAN_SK.md
