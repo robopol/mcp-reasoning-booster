@@ -66,6 +66,26 @@ Plain text (no JSON parsing) via `solve-text`:
 { "name": "solve-text", "arguments": { "task": "your task", "iterations": 8, "config": { "useSampling": true, "numCandidates": 5 } } }
 ```
 
+### Examples (two-model workflow)
+Use this when a weaker model proposes candidates and a stronger arbiter picks one.
+
+1) Start a session:
+```json
+{ "name": "start", "arguments": { "task": "your task", "config": { "useSampling": true, "numCandidates": 7 } } }
+```
+
+2) Propose candidates (does NOT mutate state):
+```json
+{ "name": "propose", "arguments": { "sessionId": "ses_...", "k": 7, "mode": "fast" } }
+```
+
+3) Commit exactly one candidate (this mutates state):
+```json
+{ "name": "commit", "arguments": { "sessionId": "ses_...", "chosenIndex": 0 } }
+```
+
+Then you can continue with `step` / `multi-step` and finish via `summarize`.
+
 ### Sampling priority
 1) Direct HTTP (Cerebras/OpenAI) if API keys are present
 2) MCP sampling (client exposes `sampling`)
