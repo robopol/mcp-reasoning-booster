@@ -196,7 +196,28 @@ export function registerTools(params: {
       type: "object",
       properties: {
         task: { type: "string", description: "Task or goal description (required)" },
-        config: { type: "object" },
+        config: {
+          type: "object",
+          properties: {
+            maxSteps: { type: "number", description: "Max steps to keep in scratchpad", default: 16 },
+            numCandidates: { type: "number", description: "Candidates per iteration", default: 5 },
+            topM: { type: "number", description: "Top-M kept for selection/beam", default: 2 },
+            allowBacktrack: { type: "boolean", description: "Allow backtrack on loops/stagnation", default: true },
+            wRules: { type: "number", description: "Weight: rules score", default: 0.6 },
+            wRedundancy: { type: "number", description: "Weight: redundancy/novelty", default: 0.25 },
+            wConsistency: { type: "number", description: "Weight: consistency", default: 0.15 },
+            useSampling: { type: "boolean", description: "Enable LLM sampling (auto if keys/capabilities)", default: undefined },
+            samplingMaxTokens: { type: "number", description: "LLM max tokens per call", default: 2000 },
+            minImprovement: { type: "number", description: "Min score delta to avoid stagnation", default: 0.01 },
+            beamWidth: { type: "number", description: "Shallow beam width", default: 1 },
+            beamDepth: { type: "number", description: "Shallow beam depth", default: 2 },
+            llmMaxCalls: { type: "number", description: "Hard budget of LLM calls", default: 8 },
+            resampleOnParseFailure: { type: "boolean", description: "Make a second stricter request if parse fails", default: false },
+            voiAlpha: { type: "number", description: "Weight of VoI prior in beam selection", default: 0.5 },
+            executeVerification: { type: "boolean", description: "If true, record verification notes into state.uncertainty", default: false }
+          },
+          additionalProperties: true
+        },
         seedHints: { type: "array", description: "Initial hints to seed into state.hints", items: { type: "string" } }
       },
       required: ["task"],
@@ -228,7 +249,15 @@ export function registerTools(params: {
   toolRegistry.set("step", {
     name: "step",
     description: "One iteration: Best-of-N, scoring and step application. PRIMARY JSON is in content[0].text (chosen, candidates, state). Supports addHints to propagate arbiter-selected ideas before this step.",
-    inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, additionalProperties: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string", description: "Session identifier from 'start'" },
+        overrideNumCandidates: { type: "number" },
+        addHints: { type: "array", description: "Hints to merge into state.hints before this step", items: { type: "string" } }
+      },
+      additionalProperties: false
+    },
     handler: async (args: Record<string, unknown>) => {
       const sessionId = String((args as any).sessionId ?? "");
       const overrideNumCandidates = (args as any).overrideNumCandidates as number | undefined;
@@ -242,7 +271,13 @@ export function registerTools(params: {
       };
       const verifier = createVerifier(cfg);
       const sampler = session.config.useSampling ? getSampler(server, session.diagnostics ?? (session.diagnostics = { totalCalls: 0 })) : undefined;
-      const { chosen, candidates, newState } = await runOneIteration(verifier, cfg, session.state.task, session.state, sampler);
+      const { chosen, candidates, newState } = await runOneIteration(
+        verifier,
+        cfg,
+        session.state.task,
+        session.state,
+        sampler
+      );
       session.state = newState;
       session.history.push({ chosen, candidates });
       return { content: [
@@ -255,7 +290,16 @@ export function registerTools(params: {
   toolRegistry.set("multi-step", {
     name: "multi-step",
     description: "Run N iterations with optional budget overrides and return final state. PRIMARY JSON is in content[0].text (state). Supports addHints to seed hints for all iterations in this call.",
-    inputSchema: { type: "object", properties: { sessionId: { type: "string" }, iterations: { type: "number" } }, additionalProperties: true },
+    inputSchema: {
+      type: "object",
+      properties: {
+        sessionId: { type: "string" },
+        iterations: { type: "number" },
+        overrideNumCandidates: { type: "number" },
+        addHints: { type: "array", description: "Hints to merge into state.hints before iterations", items: { type: "string" } }
+      },
+      additionalProperties: false
+    },
     handler: async (args: Record<string, unknown>) => {
       const sessionId = String((args as any).sessionId ?? "");
       const iterations = Number((args as any).iterations ?? 1);
@@ -270,7 +314,13 @@ export function registerTools(params: {
           ...(overrideNumCandidates ? { numCandidates: overrideNumCandidates } : {})
         };
         const verifier = createVerifier(cfg);
-        const { chosen, candidates, newState } = await runOneIteration(verifier, cfg, session.state.task, session.state, sampler);
+        const { chosen, candidates, newState } = await runOneIteration(
+          verifier,
+          cfg,
+          session.state.task,
+          session.state,
+          sampler
+        );
         session.state = newState;
         session.history.push({ chosen, candidates });
       }
@@ -281,7 +331,11 @@ export function registerTools(params: {
   toolRegistry.set("get-state", {
     name: "get-state",
     description: "Return the current scratchpad state for a session. Result: PRIMARY JSON is in content[0].text.",
-    inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: { type: "string" } },
+      additionalProperties: false
+    },
     handler: async (args: Record<string, unknown>) => {
       const sessionId = String((args as any).sessionId ?? "");
       const session = sessions.get(sessionId);
@@ -293,20 +347,37 @@ export function registerTools(params: {
   toolRegistry.set("summarize", {
     name: "summarize",
     description: "Summarize the solution based on the scratchpad. PRIMARY content[0].text is JSON mirror { sessionId, summary }. content[1].text is human-readable summary for convenience.",
-    inputSchema: { type: "object", properties: { sessionId: { type: "string" } }, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: { sessionId: { type: "string" } },
+      additionalProperties: false
+    },
     handler: async (args: Record<string, unknown>) => {
       const sessionId = String((args as any).sessionId ?? "");
       const session = sessions.get(sessionId);
       if (!session) throw new Error(`Unknown sessionId: ${sessionId}`);
       const summary = summarizeSolution(session.state);
-      return { content: [ { type: "text", text: asJson({ sessionId, summary }) }, { type: "text", text: summary } ] };
+      const jsonMirror = asJson({ sessionId, summary });
+      return { content: [ { type: "text", text: jsonMirror }, { type: "text", text: summary } ] };
     }
   });
 
   toolRegistry.set("solve", {
     name: "solve",
     description: "One-shot reasoning: start session, run N iterations, return summary and steps. PRIMARY JSON is in content[0].text; agent MUST parse. Supports seedHints. Optional file save via outputPath.",
-    inputSchema: { type: "object", properties: { task: { type: "string" }, iterations: { type: "number" }, config: { type: "object" }, seedHints: { type: "array", items: { type: "string" } }, outputPath: { type: "string" }, outputFormat: { type: "string" } }, required: ["task"], additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "Task or goal description (required)" },
+        iterations: { type: "number", description: "How many iterations to run", default: 8 },
+        config: { type: "object" },
+        seedHints: { type: "array", description: "Initial hints to seed into state.hints", items: { type: "string" } },
+        outputPath: { type: "string", description: "Optional file path to save the same JSON/text payload" },
+        outputFormat: { type: "string", description: "json (default) | text (summary only)", default: "json" }
+      },
+      required: ["task"],
+      additionalProperties: false
+    },
     handler: async (args: Record<string, unknown>) => {
       const task = String((args as any).task ?? "").trim();
       if (!task) throw new Error("Missing 'task'");
@@ -331,14 +402,22 @@ export function registerTools(params: {
       for (let i = 0; i < iterations; i++) {
         const verifier = createVerifier(merged);
         const budgetReached = sampler && (session.diagnostics?.totalCalls ?? 0) >= maxCalls;
-        const { chosen, candidates, newState } = await runOneIteration(verifier, merged, session.state.task, session.state, budgetReached ? undefined : sampler);
+        const { chosen, candidates, newState } = await runOneIteration(
+          verifier,
+          merged,
+          session.state.task,
+          session.state,
+          budgetReached ? undefined : sampler
+        );
         session.state = newState;
         session.history.push({ chosen, candidates });
       }
       const summary = summarizeSolution(session.state);
       const arbiterPicks = extractArbiterPicks(session.diagnostics);
       const lastRaw = getLastRawResponse(session.diagnostics);
-      const enrichedSummary = arbiterPicks.length ? `${summary}\n\nArbiter picks (from raw LLM prose):\n- ${arbiterPicks.join("\n- ")}` : summary;
+      const enrichedSummary = arbiterPicks.length
+        ? `${summary}\n\nArbiter picks (from raw LLM prose):\n- ${arbiterPicks.join("\n- ")}`
+        : summary;
       const payload = { sessionId: id, summary: enrichedSummary, arbiterPicks, lastRawResponse: lastRaw, steps: session.state.steps, hints: session.state.hints, config: merged, diagnostics: session.diagnostics };
 
       const outputPathRaw = (args as any).outputPath;
@@ -352,13 +431,157 @@ export function registerTools(params: {
           const safeBase = pathResolve(cwd);
           const safePath = abs.startsWith(safeBase) ? abs : pathResolve(safeBase, pathJoin(".", "summary.json"));
           await writeFile(safePath, text, { encoding: "utf8" });
-        } catch {}
+        } catch {
+          // ignore write errors, still return payload
+        }
       }
 
       const content: Array<{ type: "text"; text: string }> = [ { type: "text", text: asJson(payload) } ];
-      if (arbiterPicks.length) content.push({ type: "text", text: `Arbiter picks:\n- ${arbiterPicks.join("\n- ")}` });
-      if (lastRaw) content.push({ type: "text", text: `Raw LLM response (last):\n${lastRaw}` });
+      if (arbiterPicks.length) {
+        content.push({ type: "text", text: `Arbiter picks:\n- ${arbiterPicks.join("\n- ")}` });
+      }
+      if (lastRaw) {
+        content.push({ type: "text", text: `Raw LLM response (last):\n${lastRaw}` });
+      }
       return { content };
+    }
+  });
+
+  toolRegistry.set("solve-text", {
+    name: "solve-text",
+    description: "One-shot reasoning with plain text primary output. content[0].text is the human-readable summary.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task: { type: "string", description: "Task or goal description (required)" },
+        iterations: { type: "number", description: "How many iterations to run", default: 8 },
+        config: { type: "object" },
+        seedHints: { type: "array", items: { type: "string" } },
+        outputPath: { type: "string", description: "Optional file path to save the text summary" }
+      },
+      required: ["task"],
+      additionalProperties: false
+    },
+    handler: async (args: Record<string, unknown>) => {
+      const solve = toolRegistry.get("solve")!;
+      const res = await solve.handler({
+        task: (args as any).task,
+        iterations: (args as any).iterations,
+        config: (args as any).config,
+        seedHints: (args as any).seedHints,
+        outputPath: (args as any).outputPath,
+        outputFormat: "text"
+      });
+      const textBlocks = (res?.content || []).map((c: any) => (typeof c?.text === "string" ? c.text : ""));
+      let summaryText = "";
+      for (const t of textBlocks) {
+        if (t && !t.trim().startsWith("{")) { summaryText = t; break; }
+      }
+      if (!summaryText) {
+        try {
+          const payload = JSON.parse(textBlocks[0] || "{}");
+          summaryText = String(payload?.summary || "(no summary)");
+        } catch { summaryText = "(no summary)"; }
+      }
+      return { content: [ { type: "text", text: summaryText } ] };
+    }
+  });
+
+  toolRegistry.set("usage", {
+    name: "usage",
+    description: "Call this first. Returns exact how-to (mcp.json, shell commands, examples). PRIMARY JSON is in content[0].text. Mock mode is for local testing only; do not use in production runs.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        topic: { type: "string", description: "optional: 'quick' | 'full'" }
+      },
+      additionalProperties: false
+    },
+    handler: async () => {
+      const payload = {
+        intro: "Reasoning Booster MCP: parse JSON from content[0].text; file output via outputPath is optional.",
+        contract: {
+          primaryOutput: "JSON in content[0].text",
+          parseNote: "Always JSON.parse the first text content.",
+        },
+        shellCommands: {
+          powershell5: "Set-Location mcp-reasoning-booster; npm run build; npx --yes tsx tests\\demo_sampling.ts --sampling=mock --task \"<your task>\"",
+          pwsh_or_cmd: "cd mcp-reasoning-booster && npm run build && npx --yes tsx tests\\demo_sampling.ts --sampling=mock --task \"<your task>\"",
+          bash: "cd mcp-reasoning-booster && npm run build && npx tsx tests/demo_sampling.ts --sampling=mock --task '<your task>'"
+        },
+        clientConfig: {
+          mcpServers: {
+            "reasoning-booster": {
+              command: "node",
+              args: ["./dist/index.js"],
+              cwd: "./mcp-reasoning-booster",
+              transport: "stdio"
+            }
+          }
+        },
+        tools: {
+          start: {
+            input: ["task (string)", "config? (object)", "seedHints? (string[])"]
+          },
+          step: {
+            input: ["sessionId (string)", "overrideNumCandidates? (number)", "addHints? (string[])"]
+          },
+          "multi-step": {
+            input: ["sessionId (string)", "iterations (number)", "overrideNumCandidates? (number)", "addHints? (string[])"]
+          },
+          summarize: { input: ["sessionId (string)"] },
+          "get-state": { input: ["sessionId (string)"] },
+          solve: {
+            input: ["task (string)", "iterations? (number)", "config? (object)", "seedHints? (string[])", "outputPath? (string)", "outputFormat? ('json'|'text')"]
+          },
+          "solve-text": {
+            input: ["task (string)", "iterations? (number)", "config? (object)", "seedHints? (string[])", "outputPath? (string)"]
+          }
+        },
+        examples: {
+          solve: {
+            name: "solve",
+            arguments: {
+              task: "Hard problem (succinct).",
+              iterations: 10,
+              config: { useSampling: true, numCandidates: 8, beamWidth: 2, beamDepth: 2, samplingMaxTokens: 3000 },
+              seedHints: ["Define one measurable subgoal and the success criterion.", "Design a quick experiment that isolates one factor."],
+              outputPath: "./summary.json",
+              outputFormat: "json"
+            }
+          },
+          minimalQuickstartNoSampling: {
+            name: "solve",
+            arguments: {
+              task: "Simple task (succinct).",
+              iterations: 6,
+              config: { useSampling: false, numCandidates: 3 }
+            }
+          },
+          multiRound: [
+            { name: "start", arguments: { task: "Hard problem (succinct).", config: { useSampling: true, numCandidates: 8, beamWidth: 2, beamDepth: 2 }, seedHints: ["Hint A","Hint B"] } },
+            { name: "step",  arguments: { sessionId: "ses_...", overrideNumCandidates: 8 } },
+            { name: "step",  arguments: { sessionId: "ses_...", overrideNumCandidates: 8, addHints: ["Promoted Hint 1","Promoted Hint 2"] } },
+            { name: "summarize", arguments: { sessionId: "ses_..." } }
+          ],
+          solveText: {
+            name: "solve-text",
+            arguments: {
+              task: "Return plain text summary without JSON parsing.",
+              iterations: 8,
+              config: { useSampling: false, numCandidates: 5 }
+            }
+          }
+        },
+        notes: [
+          "Prefer short, verifiable steps with how_to_verify.",
+          "Hints should be 3–5 concise, reusable ideas; they propagate across branches.",
+          "Use llmMaxCalls to cap token budget; increase samplingMaxTokens if truncation occurs.",
+          "Secrets: put API keys into mcp-reasoning-booster/secrets.local.txt (or secrets.txt); environment variables are optional fallback.",
+          "Mock note: --sampling=mock enables a local sampler for offline testing only. For real LLMs, omit this flag and ensure secrets are set."
+        ]
+      };
+      return { content: [ { type: "text", text: asJson(payload) } ] };
     }
   });
 }
