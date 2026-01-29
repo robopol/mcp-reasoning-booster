@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Local secrets (NEVER commit real keys)
+secrets.local.txt
+secrets.txt
+
+# Local config overrides
+config.local.json
+
+# Misc
+demo-raw.txt
+demo-summary.json
