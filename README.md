@@ -8,6 +8,7 @@ What it provides:
 - Diagnostics: `provider`, `lastModel`, `rawSamples` — audit of whether LLM/MCP/heuristics were used.
 - Robust parsing: JSON extraction, `<think>…</think>` stripping, heuristic fallback when raw output is weak.
 - Session tools (`start`, `step`, `multi-step`, `summarize`, `solve`); the primary result is always in `content[0].text` (JSON).
+- Two-model workflow tools (`propose`, `commit`) to separate Judge-only scoring from state mutation.
 
 ### Install
 ```bash
@@ -43,6 +44,8 @@ Notes:
   - `solve`: `{ task, iterations?, config?, seedHints?, outputPath?, outputFormat? }`
     - Returns JSON: `{ sessionId, summary, steps, hints, config, diagnostics, arbiterPicks, lastRawResponse }` (always includes `arbiterPicks` and `lastRawResponse`)
   - `start`: `{ task, config?, seedHints? }` → `{ sessionId, state, config }`
+  - `propose`: `{ sessionId, k?, mode?, addHints? }` → `{ candidates, rejected, stateSnapshot, diagnostics }`
+  - `commit`: `{ sessionId, chosenText? | chosenIndex?, artifact? }` → `{ state }`
   - `step`: `{ sessionId, overrideNumCandidates?, addHints? }` → `{ chosen, candidates, state }`
   - `multi-step`: `{ sessionId, iterations, overrideNumCandidates?, addHints? }` → `{ state }`
   - `get-state`: `{ sessionId }` → full session object (JSON)

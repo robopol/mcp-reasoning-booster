@@ -38,6 +38,12 @@ export function makeUsageTool(): ToolDef {
           start: {
             input: ["task (string)", "config? (object)", "seedHints? (string[])"]
           },
+          propose: {
+            input: ["sessionId (string)", "k? (number)", "mode? ('fast'|'slow')", "addHints? (string[])"]
+          },
+          commit: {
+            input: ["sessionId (string)", "chosenText? (string)", "chosenIndex? (number)", "artifact? (any)"]
+          },
           step: {
             input: ["sessionId (string)", "overrideNumCandidates? (number)", "addHints? (string[])"]
           },
@@ -75,6 +81,8 @@ export function makeUsageTool(): ToolDef {
           },
           multiRound: [
             { name: "start", arguments: { task: "Hard problem (succinct).", config: { useSampling: true, numCandidates: 8, beamWidth: 2, beamDepth: 2 }, seedHints: ["Hint A","Hint B"] } },
+            { name: "propose", arguments: { sessionId: "ses_...", k: 8, mode: "fast" } },
+            { name: "commit", arguments: { sessionId: "ses_...", chosenIndex: 0 } },
             { name: "step",  arguments: { sessionId: "ses_...", overrideNumCandidates: 8 } },
             { name: "step",  arguments: { sessionId: "ses_...", overrideNumCandidates: 8, addHints: ["Promoted Hint 1","Promoted Hint 2"] } },
             { name: "summarize", arguments: { sessionId: "ses_..." } }

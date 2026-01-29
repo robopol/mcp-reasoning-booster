@@ -38,6 +38,24 @@ function loadSecrets(paths) {
     }
     return out;
 }
+export function loadAppConfig() {
+    // Try config.local.json, then config.json in current working directory
+    const cwd = process.cwd();
+    const local = join(cwd, "config.local.json");
+    const base = join(cwd, "config.json");
+    const a = loadJson(base);
+    const b = loadJson(local);
+    return { ...(a || {}), ...(b || {}) };
+}
+export function loadSessionStoreConfig() {
+    const cfg = loadAppConfig();
+    const kind = cfg?.sessionStore?.kind ?? "memory";
+    return { kind };
+}
+export function loadReasoningDefaults() {
+    const cfg = loadAppConfig();
+    return (cfg?.reasoning ?? {});
+}
 export function loadSamplerConfig() {
     // Try config.local.json, then config.json in current working directory
     const cwd = process.cwd();

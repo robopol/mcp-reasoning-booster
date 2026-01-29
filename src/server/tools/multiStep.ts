@@ -4,6 +4,7 @@ import type { ReasoningConfig } from "../../types.js";
 import { runOneIteration } from "../../orchestrator.js";
 import { createSampler } from "../../sampling/sampler.js";
 import { createVerifierFromConfig } from "../../verifiers/factory.js";
+import { createMemoryFromConfig } from "../../memory/factory.js";
 import type { ToolDef } from "../toolRegistry.js";
 import { asJson, mergeHints } from "../utils/common.js";
 
@@ -37,6 +38,15 @@ export function makeMultiStepTool(params: {
       session.state.hints = mergeHints(session.state.hints, (args as any).addHints);
       const diag = session.diagnostics ?? (session.diagnostics = { totalCalls: 0 });
       const sampler = session.config.useSampling ? createSampler(server, diag) : undefined;
+      // Ensure memory exists; record initial state hash (best-effort)
+      try {
+        const memEngine = createMemoryFromConfig(session.config);
+        if (!session.memory || !session.memory.state) {
+          session.memory = { kind: memEngine.kind, state: memEngine.initState() as any };
+        }
+        const ms = session.memory.state as any;
+        memEngine.recordState(ms, memEngine.hashState(session.state));
+      } catch {}
 
       for (let i = 0; i < iterations; i++) {
         const cfg: ReasoningConfig = {
@@ -53,6 +63,15 @@ export function makeMultiStepTool(params: {
         );
         session.state = newState;
         session.history.push({ chosen, candidates });
+        // Update memory per step (best-effort)
+        try {
+          const memEngine = createMemoryFromConfig(cfg);
+          const ms = session.memory?.state as any;
+          if (ms) {
+            memEngine.recordStep(ms, chosen.proposal.text);
+            memEngine.recordState(ms, memEngine.hashState(session.state));
+          }
+        } catch {}
       }
 
       sessionStore.set(sessionId, session);

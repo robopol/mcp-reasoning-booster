@@ -3,9 +3,11 @@ import { writeFile } from "node:fs/promises";
 import { resolve as pathResolve, join as pathJoin, isAbsolute as pathIsAbsolute } from "node:path";
 import { DefaultConfig, ReasoningConfig, Session, State } from "../../types.js";
 import type { SessionStore } from "../../state/sessionStore.js";
+import { loadReasoningDefaults } from "../../config.js";
 import { initializeScratchpad, runOneIteration, summarizeSolution } from "../../orchestrator.js";
 import { createSampler, shouldEnableSampling } from "../../sampling/sampler.js";
 import { createVerifierFromConfig } from "../../verifiers/factory.js";
+import { createMemoryFromConfig } from "../../memory/factory.js";
 import type { ToolDef } from "../toolRegistry.js";
 import { asJson, extractArbiterPicks, getLastRawResponse, makeSessionId, mergeHints } from "../utils/common.js";
 
@@ -37,7 +39,7 @@ export function makeSolveTool(params: {
 
       const iterations = Number((args as any).iterations ?? 8);
       const cfg = (args as any).config as Partial<ReasoningConfig> | undefined;
-      const merged: ReasoningConfig = { ...DefaultConfig, ...(cfg ?? {}) };
+      const merged: ReasoningConfig = { ...DefaultConfig, ...loadReasoningDefaults(), ...(cfg ?? {}) };
       if (cfg?.useSampling === undefined) {
         if (shouldEnableSampling(server)) merged.useSampling = true;
       }
@@ -45,7 +47,8 @@ export function makeSolveTool(params: {
       const state: State = initializeScratchpad(task);
       state.hints = mergeHints(state.hints, (args as any).seedHints);
       const id = makeSessionId();
-      const session: Session = { id, state, config: merged, history: [], diagnostics: { totalCalls: 0 } };
+      const memEngine = createMemoryFromConfig(merged);
+      const session: Session = { id, state, config: merged, history: [], diagnostics: { totalCalls: 0 }, memory: { kind: memEngine.kind, state: memEngine.initState() as any } };
       sessionStore.set(id, session);
 
       const sampler = merged.useSampling ? createSampler(server, session.diagnostics!) : undefined;

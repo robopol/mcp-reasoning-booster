@@ -1,10 +1,12 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { DefaultConfig, ReasoningConfig, Session, State } from "../../types.js";
 import type { SessionStore } from "../../state/sessionStore.js";
+import { loadReasoningDefaults } from "../../config.js";
 import { initializeScratchpad } from "../../orchestrator.js";
 import { shouldEnableSampling } from "../../sampling/sampler.js";
 import type { ToolDef } from "../toolRegistry.js";
 import { asJson, makeSessionId, mergeHints } from "../utils/common.js";
+import { createMemoryFromConfig } from "../../memory/factory.js";
 
 export function makeStartTool(params: {
   server: Server;
@@ -52,7 +54,7 @@ export function makeStartTool(params: {
       const cfg = (args as any).config as Partial<ReasoningConfig> | undefined;
       if (!task) throw new Error("Missing 'task'");
 
-      const merged: ReasoningConfig = { ...DefaultConfig, ...(cfg ?? {}) };
+      const merged: ReasoningConfig = { ...DefaultConfig, ...loadReasoningDefaults(), ...(cfg ?? {}) };
       if (cfg?.useSampling === undefined) {
         if (shouldEnableSampling(server)) merged.useSampling = true;
       }
@@ -61,7 +63,8 @@ export function makeStartTool(params: {
       state.hints = mergeHints(state.hints, (args as any).seedHints);
 
       const id = makeSessionId();
-      const session: Session = { id, state, config: merged, history: [] };
+      const memEngine = createMemoryFromConfig(merged);
+      const session: Session = { id, state, config: merged, history: [], memory: { kind: memEngine.kind, state: memEngine.initState() as any } };
       sessionStore.set(id, session);
 
       return {

@@ -7,6 +7,8 @@ export interface ReasoningConfig {
   wRedundancy: number;
   wConsistency: number;
   verifierKind?: "default";
+  memoryKind?: "default";
+  metacontrolKind?: "default";
   useSampling?: boolean;
   samplingMaxTokens?: number;
   minImprovement?: number;
@@ -42,6 +44,7 @@ export interface StepProposal {
   howToVerify?: string;
   expectedOutcomes?: ExpectedOutcome[];
   verification?: VerificationSpec;
+  artifact?: unknown;
 }
 
 export interface StepScoreParts {
@@ -69,6 +72,7 @@ export interface StateStepEntry {
   voi?: number;
   ig?: number;
   cost?: number;
+  artifact?: unknown;
 }
 
 export interface State {
@@ -89,6 +93,12 @@ export interface Session {
   config: ReasoningConfig;
   history: Array<{ chosen: ScoredStep; candidates: ScoredStep[] }>;
   diagnostics?: SamplerDiagnostics;
+  memory?: { kind: string; state: Record<string, unknown> };
+  lastPropose?: {
+    at: string;
+    candidates: ScoredStep[];
+    rejected?: Array<{ text: string; reason: string }>;
+  };
 }
 
 export interface Verifier {
@@ -123,6 +133,8 @@ export const DefaultConfig: ReasoningConfig = {
   wRedundancy: 0.25,
   wConsistency: 0.15,
   verifierKind: "default",
+  memoryKind: "default",
+  metacontrolKind: "default",
   useSampling: false,
   samplingMaxTokens: 2000,
   minImprovement: 0.01,

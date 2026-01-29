@@ -3,6 +3,8 @@ import type { SessionStore } from "../state/sessionStore.js";
 import type { ToolDef } from "./toolRegistry.js";
 import { makeGetStateTool } from "./tools/getState.js";
 import { makeMultiStepTool } from "./tools/multiStep.js";
+import { makeCommitTool } from "./tools/commit.js";
+import { makeProposeTool } from "./tools/propose.js";
 import { makeSolveTool } from "./tools/solve.js";
 import { makeSolveTextTool } from "./tools/solveText.js";
 import { makeStartTool } from "./tools/start.js";
@@ -22,6 +24,8 @@ export function registerTools(params: {
   toolRegistry.set("multi-step", makeMultiStepTool({ server, sessionStore }));
   toolRegistry.set("get-state", makeGetStateTool({ sessionStore }));
   toolRegistry.set("summarize", makeSummarizeTool({ sessionStore }));
+  toolRegistry.set("propose", makeProposeTool({ server, sessionStore }));
+  toolRegistry.set("commit", makeCommitTool({ sessionStore }));
   toolRegistry.set("solve", makeSolveTool({ server, sessionStore }));
   toolRegistry.set("solve-text", makeSolveTextTool({ toolRegistry }));
   toolRegistry.set("usage", makeUsageTool());

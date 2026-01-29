@@ -560,6 +560,22 @@ export async function generateCandidateSteps(
   return domainFallback;
 }
 
+export function enrichProposalsWithDomainVerification(task: string, proposals: StepProposal[]): void {
+  // Enrich proposals with domain verification only when the step itself is a weighing action
+  for (const p of proposals) {
+    if (!p.verification && isWeighingTaskText(p.text)) {
+      const sim = simulateWeighing(task, p.text);
+      if (sim?.outcomes?.length) {
+        p.verification = p.verification || {};
+        p.verification.kind = "weighing";
+        p.verification.outcomes = sim.outcomes.map(o => ({ label: o.label, rule: o.note, stateUpdate: o.stateUpdate }));
+        // keep legacy mirrors for UI/debug
+        p.expectedOutcomes = p.expectedOutcomes ?? sim.outcomes.map(o => ({ label: o.label }));
+      }
+    }
+  }
+}
+
 export function scoreCandidates(
   verifier: Verifier,
   task: string,
@@ -691,19 +707,7 @@ export async function runOneIteration(
     sampler,
     config.samplingMaxTokens
   );
-  // Enrich proposals with domain verification only when the step itself is a weighing action
-  for (const p of proposals) {
-    if (!p.verification && isWeighingTaskText(p.text)) {
-      const sim = simulateWeighing(task, p.text);
-      if (sim?.outcomes?.length) {
-        p.verification = p.verification || {};
-        p.verification.kind = "weighing";
-        p.verification.outcomes = sim.outcomes.map(o => ({ label: o.label, rule: o.note, stateUpdate: o.stateUpdate }));
-        // keep legacy mirrors for UI/debug
-        p.expectedOutcomes = p.expectedOutcomes ?? sim.outcomes.map(o => ({ label: o.label }));
-      }
-    }
-  }
+  enrichProposalsWithDomainVerification(task, proposals);
   const scored = scoreCandidates(verifier, task, state, proposals);
   const top = scored.slice(0, Math.max(1, config.topM));
   if (top.length === 0) {

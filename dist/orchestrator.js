@@ -554,6 +554,21 @@ export async function generateCandidateSteps(task, state, numCandidates, sampler
             : generateGenericActionableFallback(task, numCandidates));
     return domainFallback;
 }
+export function enrichProposalsWithDomainVerification(task, proposals) {
+    // Enrich proposals with domain verification only when the step itself is a weighing action
+    for (const p of proposals) {
+        if (!p.verification && isWeighingTaskText(p.text)) {
+            const sim = simulateWeighing(task, p.text);
+            if (sim?.outcomes?.length) {
+                p.verification = p.verification || {};
+                p.verification.kind = "weighing";
+                p.verification.outcomes = sim.outcomes.map(o => ({ label: o.label, rule: o.note, stateUpdate: o.stateUpdate }));
+                // keep legacy mirrors for UI/debug
+                p.expectedOutcomes = p.expectedOutcomes ?? sim.outcomes.map(o => ({ label: o.label }));
+            }
+        }
+    }
+}
 export function scoreCandidates(verifier, task, state, proposals) {
     const scored = proposals.map(p => ({
         proposal: p,
@@ -672,19 +687,7 @@ export function summarizeSolution(state) {
 }
 export async function runOneIteration(verifier, config, task, state, sampler) {
     const proposals = await generateCandidateSteps(task, state, config.numCandidates, sampler, config.samplingMaxTokens);
-    // Enrich proposals with domain verification only when the step itself is a weighing action
-    for (const p of proposals) {
-        if (!p.verification && isWeighingTaskText(p.text)) {
-            const sim = simulateWeighing(task, p.text);
-            if (sim?.outcomes?.length) {
-                p.verification = p.verification || {};
-                p.verification.kind = "weighing";
-                p.verification.outcomes = sim.outcomes.map(o => ({ label: o.label, rule: o.note, stateUpdate: o.stateUpdate }));
-                // keep legacy mirrors for UI/debug
-                p.expectedOutcomes = p.expectedOutcomes ?? sim.outcomes.map(o => ({ label: o.label }));
-            }
-        }
-    }
+    enrichProposalsWithDomainVerification(task, proposals);
     const scored = scoreCandidates(verifier, task, state, proposals);
     const top = scored.slice(0, Math.max(1, config.topM));
     if (top.length === 0) {

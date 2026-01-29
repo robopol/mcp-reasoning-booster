@@ -1,5 +1,6 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import type { ReasoningConfig } from "./types.js";
 
 export interface SamplingConfig {
   provider?: "cerebras" | "openai" | "mcp" | "none";
@@ -18,6 +19,7 @@ export interface SessionStoreConfig {
 export interface AppConfig {
   sampling?: SamplingConfig;
   sessionStore?: SessionStoreConfig;
+  reasoning?: Partial<ReasoningConfig>;
 }
 
 function loadJson(path: string): any | undefined {
@@ -67,6 +69,11 @@ export function loadSessionStoreConfig(): SessionStoreConfig {
   const cfg = loadAppConfig();
   const kind = cfg?.sessionStore?.kind ?? "memory";
   return { kind };
+}
+
+export function loadReasoningDefaults(): Partial<ReasoningConfig> {
+  const cfg = loadAppConfig();
+  return (cfg?.reasoning ?? {}) as Partial<ReasoningConfig>;
 }
 
 export function loadSamplerConfig(): SamplingConfig {
