@@ -22,6 +22,12 @@ async function directOpenAISample(prompt: string, maxTokens: number, diag?: Samp
   if (!apiKey) return null;
   const model = cfg.openaiModel || "gpt-4o-mini";
   try {
+    if (diag) {
+      diag.provider = "direct-openai";
+      diag.totalCalls = (diag.totalCalls ?? 0) + 1;
+      diag.lastModel = model;
+      diag.lastPromptChars = prompt?.length;
+    }
     const res = await fetch(cfg.openaiBaseUrl || "https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -35,22 +41,28 @@ async function directOpenAISample(prompt: string, maxTokens: number, diag?: Samp
         temperature: 0.2,
       }),
     });
-    if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}`);
+    if (!res.ok) {
+      if (diag) {
+        diag.lastHttpStatus = res.status;
+        diag.lastError = `OpenAI HTTP ${res.status}`;
+        diag.lastErrorAt = new Date().toISOString();
+      }
+      return null;
+    }
     const data: any = await res.json();
     const text: string | undefined = data?.choices?.[0]?.message?.content;
     if (diag) {
-      diag.provider = "direct-openai";
-      diag.totalCalls = (diag.totalCalls ?? 0) + 1;
-      diag.lastPromptChars = prompt?.length;
       diag.lastResponseChars = text?.length;
-      diag.lastModel = model;
       diag.lastOkAt = new Date().toISOString();
       diag.rawSamples = diag.rawSamples || [];
       diag.rawSamples.push({ prompt, response: text, model, provider: diag.provider, at: new Date().toISOString() });
     }
     return typeof text === "string" ? text : null;
-  } catch {
-    if (diag) diag.lastErrorAt = new Date().toISOString();
+  } catch (e: any) {
+    if (diag) {
+      diag.lastErrorAt = new Date().toISOString();
+      diag.lastError = String(e?.message ?? e ?? "OpenAI error");
+    }
     return null;
   }
 }
@@ -63,6 +75,12 @@ async function directCerebrasSample(prompt: string, maxTokens: number, diag?: Sa
   if (!model) return null;
   try {
     const base = (cfg.cerebrasBaseUrl || "https://api.cerebras.ai/v1").replace(/\/$/, "");
+    if (diag) {
+      diag.provider = "cerebras";
+      diag.totalCalls = (diag.totalCalls ?? 0) + 1;
+      diag.lastModel = model;
+      diag.lastPromptChars = prompt?.length;
+    }
     const res = await fetch(base + "/chat/completions", {
       method: "POST",
       headers: {
@@ -76,22 +94,33 @@ async function directCerebrasSample(prompt: string, maxTokens: number, diag?: Sa
         temperature: 0.2,
       }),
     });
-    if (!res.ok) throw new Error(`Cerebras HTTP ${res.status}`);
+    if (!res.ok) {
+      let msg = `Cerebras HTTP ${res.status}`;
+      try {
+        const body = await res.text();
+        if (body && body.trim()) msg = `${msg}: ${body.slice(0, 500)}`;
+      } catch {}
+      if (diag) {
+        diag.lastHttpStatus = res.status;
+        diag.lastError = msg;
+        diag.lastErrorAt = new Date().toISOString();
+      }
+      return null;
+    }
     const data: any = await res.json();
     const text: string | undefined = data?.choices?.[0]?.message?.content;
     if (diag) {
-      diag.provider = "cerebras";
-      diag.totalCalls = (diag.totalCalls ?? 0) + 1;
-      diag.lastPromptChars = prompt?.length;
       diag.lastResponseChars = text?.length;
-      diag.lastModel = model;
       diag.lastOkAt = new Date().toISOString();
       diag.rawSamples = diag.rawSamples || [];
       diag.rawSamples.push({ prompt, response: text, model, provider: diag.provider, at: new Date().toISOString() });
     }
     return typeof text === "string" ? text : null;
-  } catch {
-    if (diag) diag.lastErrorAt = new Date().toISOString();
+  } catch (e: any) {
+    if (diag) {
+      diag.lastErrorAt = new Date().toISOString();
+      diag.lastError = String(e?.message ?? e ?? "Cerebras error");
+    }
     return null;
   }
 }

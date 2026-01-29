@@ -6,6 +6,7 @@ export interface ReasoningConfig {
   wRules: number;
   wRedundancy: number;
   wConsistency: number;
+  verifierKind?: "default";
   useSampling?: boolean;
   samplingMaxTokens?: number;
   minImprovement?: number;
@@ -101,6 +102,8 @@ export interface SamplerDiagnostics {
   lastModel?: string;
   lastOkAt?: string;
   lastErrorAt?: string;
+  lastHttpStatus?: number;
+  lastError?: string;
   provider?: string; // "mcp" | "direct-openai" | "direct-anthropic" | other
   rawSamples?: Array<{
     prompt: string;
@@ -119,6 +122,7 @@ export const DefaultConfig: ReasoningConfig = {
   wRules: 0.6,
   wRedundancy: 0.25,
   wConsistency: 0.15,
+  verifierKind: "default",
   useSampling: false,
   samplingMaxTokens: 2000,
   minImprovement: 0.01,

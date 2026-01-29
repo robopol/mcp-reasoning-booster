@@ -1,15 +1,15 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { Session } from "./types.js";
 import { registerTools } from "./server/registerTools.js";
 import type { ToolDef } from "./server/toolRegistry.js";
+import { createInMemorySessionStore } from "./state/sessionStore.js";
 
 const server = new Server({ name: "reasoning-booster", version: "0.1.0" }, { capabilities: { tools: {} } });
-const sessions = new Map<string, Session>();
+const sessionStore = createInMemorySessionStore();
 const toolRegistry = new Map<string, ToolDef>();
 
-registerTools({ server, toolRegistry, sessions });
+registerTools({ server, toolRegistry, sessionStore });
 
 // MCP tools/list and tools/call handlers
 server.setRequestHandler(ListToolsRequestSchema, async () => {
