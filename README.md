@@ -35,6 +35,7 @@ Notes:
 - Prefer absolute or workspace-relative `cwd` (example assumes the repo root contains `mcp-reasoning-booster/`).
 - API keys are read from `mcp-reasoning-booster/secrets.local.txt` or `secrets.txt` (preferred). You do not need to place keys in `mcp.json`.
 - Optional fallback: environment variables `OPENAI_API_KEY`, `OPENAI_MODEL`, `CEREBRAS_API_KEY`, `CEREBRAS_MODEL`, `OPENAI_BASE_URL`, `CEREBRAS_BASE_URL` are supported if present.
+- Important: some MCP stdio launchers inherit only a restricted set of environment variables by default. If you rely on env keys, ensure your launcher passes them through; the most reliable option is `secrets.local.txt` in the server `cwd`.
 
 ### Tooling contract (parse-first)
 - Primary output is always JSON in `content[0].text`.
@@ -83,7 +84,9 @@ npx --yes tsx tests/demo_sampling.ts --task "Plan a 3-step experiment to test if
 Create `mcp-reasoning-booster/secrets.local.txt`:
 ```
 CEREBRAS_API_KEY=...
-CEREBRAS_MODEL=qwen-3-235b-a22b-thinking-2507
+# IMPORTANT: must be a model id you actually have access to.
+# Example: qwen-3-235b-a22b-instruct-2507
+CEREBRAS_MODEL=<your_model_id>
 CEREBRAS_BASE_URL=https://api.cerebras.ai/v1
 # Optional OpenAI
 OPENAI_API_KEY=...
