@@ -18,6 +18,24 @@ export interface ReasoningConfig {
   resampleOnParseFailure?: boolean; // if true, allows one extra resample when parsing fails
   voiAlpha?: number; // [0..1] weight for VoI prior/smoothing in beam selection
   executeVerification?: boolean; // if true, record verification outcomes/notes into state.uncertainty
+  uncertaintyRouting?: {
+    enabled?: boolean;
+    routerKind?: "off" | "hybrid";
+    // Baseline method: relative thresholds from recent runtime (no absolute "entropy > X")
+    windowSize?: number; // default 256
+    minSamples?: number; // default 32
+    highQuantile?: number; // default 0.9
+    spikeQuantile?: number; // default 0.97
+    madK?: number; // default 3.5 (Hampel-ish)
+
+    // If scores are nearly tied, treat as uncertainty and consider Slow Lane
+    scoreTieDelta?: number; // default 0.02
+
+    // Slow Lane action: temporarily increase search budget
+    slowLaneBeamWidth?: number; // default 2
+    slowLaneBeamDepth?: number; // default 2
+    slowLaneNumCandidatesMultiplier?: number; // default 1.5
+  };
 }
 
 export interface ExpectedOutcome {
@@ -120,6 +138,20 @@ export interface SamplerDiagnostics {
   lastPerplexity?: number; // exp(-mean(log p(token)))
   lastEntropy?: number; // mean token entropy (approx; depends on top_logprobs)
   lastTopLogprobsK?: number;
+  lastRouting?: {
+    slowLane: boolean;
+    reasons: string[];
+  };
+  routingHistory?: Array<{
+    at: string;
+    slowLane: boolean;
+    reasons: string[];
+    provider?: string;
+    model?: string;
+    entropy?: number;
+    perplexity?: number;
+    avgTokenLogprob?: number;
+  }>;
   provider?: string; // "mcp" | "direct-openai" | "direct-anthropic" | other
   rawSamples?: Array<{
     prompt: string;
@@ -154,6 +186,19 @@ export const DefaultConfig: ReasoningConfig = {
   resampleOnParseFailure: false,
   voiAlpha: 0.5,
   executeVerification: false,
+  uncertaintyRouting: {
+    enabled: true,
+    routerKind: "hybrid",
+    windowSize: 256,
+    minSamples: 32,
+    highQuantile: 0.9,
+    spikeQuantile: 0.97,
+    madK: 3.5,
+    scoreTieDelta: 0.02,
+    slowLaneBeamWidth: 2,
+    slowLaneBeamDepth: 2,
+    slowLaneNumCandidatesMultiplier: 1.5,
+  },
 };
 
 

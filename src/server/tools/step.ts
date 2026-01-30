@@ -58,7 +58,8 @@ export function makeStepTool(params: {
         cfg,
         session.state.task,
         session.state,
-        sampler
+        sampler,
+        diag
       );
 
       session.state = newState;

@@ -61,7 +61,8 @@ export function makeSolveTool(params: {
           merged,
           session.state.task,
           session.state,
-          budgetReached ? undefined : sampler
+          budgetReached ? undefined : sampler,
+          session.diagnostics
         );
         session.state = newState;
         session.history.push({ chosen, candidates });

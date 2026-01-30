@@ -128,6 +128,17 @@ async function run() {
   const taskArg = getArg("--task");
   const taskEnv = (globalThis as any).process?.env?.TASK as string | undefined;
   const showRaw = hasFlag("--show-raw") || (((globalThis as any).process?.env?.SHOW_RAW as string | undefined) === "1");
+  const iterationsArg = getArg("--iterations") || ((globalThis as any).process?.env?.ITERATIONS as string | undefined);
+  const iterations = Math.max(1, Math.min(60, Number(iterationsArg ?? 10)));
+
+  // Optional: enable UQ routing tuning for experiments (keeps old defaults unless enabled)
+  const uqEnable = hasFlag("--uq") || (((globalThis as any).process?.env?.UQ as string | undefined) === "1");
+  const uqMinSamples = Number(getArg("--uq-min-samples") ?? ((globalThis as any).process?.env?.UQ_MIN_SAMPLES as string | undefined) ?? 32);
+  const uqWindowSize = Number(getArg("--uq-window") ?? ((globalThis as any).process?.env?.UQ_WINDOW as string | undefined) ?? 256);
+  const uqHighQ = Number(getArg("--uq-high-q") ?? ((globalThis as any).process?.env?.UQ_HIGH_Q as string | undefined) ?? 0.9);
+  const uqSpikeQ = Number(getArg("--uq-spike-q") ?? ((globalThis as any).process?.env?.UQ_SPIKE_Q as string | undefined) ?? 0.97);
+  const uqMadK = Number(getArg("--uq-mad-k") ?? ((globalThis as any).process?.env?.UQ_MAD_K as string | undefined) ?? 3.5);
+  const uqTieDelta = Number(getArg("--uq-tie-delta") ?? ((globalThis as any).process?.env?.UQ_TIE_DELTA as string | undefined) ?? 0.02);
   const task = (taskArg && taskArg.trim().length > 0)
     ? taskArg
     : (taskEnv && taskEnv.trim().length > 0)
@@ -139,8 +150,30 @@ async function run() {
       name: "solve",
       arguments: {
         task,
-        iterations: 10,
-        config: { useSampling: true, numCandidates: 7, topM: 2, beamWidth: 2, beamDepth: 2, minImprovement: 0.01 },
+        iterations,
+        config: {
+          useSampling: true,
+          numCandidates: 7,
+          topM: 2,
+          beamWidth: 2,
+          beamDepth: 2,
+          minImprovement: 0.01,
+          ...(uqEnable ? {
+            uncertaintyRouting: {
+              enabled: true,
+              routerKind: "hybrid",
+              windowSize: uqWindowSize,
+              minSamples: uqMinSamples,
+              highQuantile: uqHighQ,
+              spikeQuantile: uqSpikeQ,
+              madK: uqMadK,
+              scoreTieDelta: uqTieDelta,
+              slowLaneBeamWidth: 3,
+              slowLaneBeamDepth: 3,
+              slowLaneNumCandidatesMultiplier: 2.0,
+            }
+          } : {})
+        },
         outputPath: "demo-summary.json",
         outputFormat: "json"
       }

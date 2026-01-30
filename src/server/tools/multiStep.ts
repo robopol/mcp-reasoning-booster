@@ -59,7 +59,8 @@ export function makeMultiStepTool(params: {
           cfg,
           session.state.task,
           session.state,
-          sampler
+          sampler,
+          diag
         );
         session.state = newState;
         session.history.push({ chosen, candidates });

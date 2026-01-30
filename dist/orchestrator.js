@@ -1,4 +1,5 @@
 import { isWeighingTaskText, simulateWeighing } from "./domain/weighingVerifier.js";
+import { makeUncertaintyRouter } from "./uncertainty/routerFactory.js";
 function parseProseToProposals(text, k) {
     if (!text)
         return [];
@@ -685,7 +686,7 @@ export function summarizeSolution(state) {
     const outcomesBlock = outcomeLines.length ? (`\nOutcome branches:\n` + outcomeLines.join("\n")) : "";
     return `Summary:\n${header}\n${bullets}${outcomesBlock}`;
 }
-export async function runOneIteration(verifier, config, task, state, sampler) {
+export async function runOneIteration(verifier, config, task, state, sampler, diagnostics) {
     const proposals = await generateCandidateSteps(task, state, config.numCandidates, sampler, config.samplingMaxTokens);
     enrichProposalsWithDomainVerification(task, proposals);
     const scored = scoreCandidates(verifier, task, state, proposals);
@@ -696,15 +697,44 @@ export async function runOneIteration(verifier, config, task, state, sampler) {
     // Promote good, verifiable ideas into global hints for cross-branch sharing
     updateHintsFromCandidates(state, scored);
     let chosen = (top.find(c => c.proposal.text.trim() !== (state.steps[state.steps.length - 1]?.text.trim())) ?? top[0]);
+    // Uncertainty-based routing (pluggable via config): may force Slow Lane search
+    const router = makeUncertaintyRouter(config);
+    const routing = router.decide({ task, state, config, scored, top, chosen, diagnostics });
+    const effConfig = routing.overrides ? { ...config, ...routing.overrides } : config;
+    let beamRan = false;
     // Stagnation control by score improvement threshold (optional)
     if (typeof config.minImprovement === "number" && state.steps.length > 0) {
         const prevScore = state.steps[state.steps.length - 1]?.score?.totalScore ?? 0;
         if (chosen.score.totalScore - prevScore < config.minImprovement) {
             // If below threshold and beam is enabled, try shallow beam exploration
-            if ((config.beamWidth ?? 1) > 1) {
-                chosen = await shallowBeam(verifier, config, task, state, top, sampler);
+            if ((effConfig.beamWidth ?? 1) > 1) {
+                chosen = await shallowBeam(verifier, effConfig, task, state, top, sampler);
+                beamRan = true;
             }
         }
+    }
+    // If router demanded Slow Lane even without stagnation, run beam if enabled.
+    if (!beamRan && routing.slowLane && (effConfig.beamWidth ?? 1) > 1) {
+        chosen = await shallowBeam(verifier, effConfig, task, state, top, sampler);
+        beamRan = true;
+    }
+    // Diagnostics: record routing decision (why we went Slow Lane)
+    if (diagnostics) {
+        const at = new Date().toISOString();
+        diagnostics.lastRouting = { slowLane: routing.slowLane, reasons: routing.reasons };
+        diagnostics.routingHistory = diagnostics.routingHistory || [];
+        diagnostics.routingHistory.push({
+            at,
+            slowLane: routing.slowLane,
+            reasons: routing.reasons,
+            provider: diagnostics.provider,
+            model: diagnostics.lastModel,
+            entropy: diagnostics.lastEntropy,
+            perplexity: diagnostics.lastPerplexity,
+            avgTokenLogprob: diagnostics.lastAvgTokenLogprob,
+        });
+        if (diagnostics.routingHistory.length > 200)
+            diagnostics.routingHistory = diagnostics.routingHistory.slice(-200);
     }
     let nextState = applyStep(state, chosen);
     // If executeVerification is enabled, record suggested state updates/notes

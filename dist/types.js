@@ -18,4 +18,17 @@ export const DefaultConfig = {
     resampleOnParseFailure: false,
     voiAlpha: 0.5,
     executeVerification: false,
+    uncertaintyRouting: {
+        enabled: true,
+        routerKind: "hybrid",
+        windowSize: 256,
+        minSamples: 32,
+        highQuantile: 0.9,
+        spikeQuantile: 0.97,
+        madK: 3.5,
+        scoreTieDelta: 0.02,
+        slowLaneBeamWidth: 2,
+        slowLaneBeamDepth: 2,
+        slowLaneNumCandidatesMultiplier: 1.5,
+    },
 };

@@ -1,5 +1,6 @@
-import { ReasoningConfig, ScoredStep, State, StepProposal, Verifier, ExpectedOutcome } from "./types.js";
+import { ReasoningConfig, ScoredStep, State, StepProposal, Verifier, ExpectedOutcome, SamplerDiagnostics } from "./types.js";
 import { isWeighingTaskText, simulateWeighing } from "./domain/weighingVerifier.js";
+import { makeUncertaintyRouter } from "./uncertainty/routerFactory.js";
 
 export type Sampler = (prompt: string, maxTokens?: number) => Promise<string | null>;
 
@@ -698,7 +699,8 @@ export async function runOneIteration(
   config: ReasoningConfig,
   task: string,
   state: State,
-  sampler?: Sampler
+  sampler?: Sampler,
+  diagnostics?: SamplerDiagnostics
 ): Promise<{ chosen: ScoredStep; candidates: ScoredStep[]; newState: State }> {
   const proposals = await generateCandidateSteps(
     task,
@@ -717,15 +719,46 @@ export async function runOneIteration(
   updateHintsFromCandidates(state, scored);
   let chosen = (top.find(c => c.proposal.text.trim() !== (state.steps[state.steps.length - 1]?.text.trim())) ?? top[0])!;
 
+  // Uncertainty-based routing (pluggable via config): may force Slow Lane search
+  const router = makeUncertaintyRouter(config);
+  const routing = router.decide({ task, state, config, scored, top, chosen, diagnostics });
+  const effConfig: ReasoningConfig = routing.overrides ? { ...config, ...routing.overrides } : config;
+  let beamRan = false;
+
   // Stagnation control by score improvement threshold (optional)
   if (typeof config.minImprovement === "number" && state.steps.length > 0) {
     const prevScore = state.steps[state.steps.length - 1]?.score?.totalScore ?? 0;
     if (chosen.score.totalScore - prevScore < config.minImprovement) {
       // If below threshold and beam is enabled, try shallow beam exploration
-      if ((config.beamWidth ?? 1) > 1) {
-        chosen = await shallowBeam(verifier, config, task, state, top, sampler);
+      if ((effConfig.beamWidth ?? 1) > 1) {
+        chosen = await shallowBeam(verifier, effConfig, task, state, top, sampler);
+        beamRan = true;
       }
     }
+  }
+
+  // If router demanded Slow Lane even without stagnation, run beam if enabled.
+  if (!beamRan && routing.slowLane && (effConfig.beamWidth ?? 1) > 1) {
+    chosen = await shallowBeam(verifier, effConfig, task, state, top, sampler);
+    beamRan = true;
+  }
+
+  // Diagnostics: record routing decision (why we went Slow Lane)
+  if (diagnostics) {
+    const at = new Date().toISOString();
+    diagnostics.lastRouting = { slowLane: routing.slowLane, reasons: routing.reasons };
+    diagnostics.routingHistory = diagnostics.routingHistory || [];
+    diagnostics.routingHistory.push({
+      at,
+      slowLane: routing.slowLane,
+      reasons: routing.reasons,
+      provider: diagnostics.provider,
+      model: diagnostics.lastModel,
+      entropy: diagnostics.lastEntropy,
+      perplexity: diagnostics.lastPerplexity,
+      avgTokenLogprob: diagnostics.lastAvgTokenLogprob,
+    });
+    if (diagnostics.routingHistory.length > 200) diagnostics.routingHistory = diagnostics.routingHistory.slice(-200);
   }
 
   let nextState = applyStep(state, chosen);
