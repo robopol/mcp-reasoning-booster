@@ -10,6 +10,10 @@ export interface SamplingConfig {
   cerebrasApiKey?: string;
   cerebrasModel?: string;
   cerebrasBaseUrl?: string;
+  // Optional: request token-level uncertainty data (where supported)
+  logprobs?: boolean;
+  // For chat/completions: how many alternatives per token (0..20 typical)
+  topLogprobs?: number;
 }
 
 export interface SessionStoreConfig {

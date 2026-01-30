@@ -7,6 +7,100 @@ function stripThinkBlocks(text: string): string {
   return text.replace(/<think>[\s\S]*?<\/think>/gi, "");
 }
 
+function clampInt(n: unknown, lo: number, hi: number, fallback: number): number {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return fallback;
+  return Math.max(lo, Math.min(hi, Math.floor(x)));
+}
+
+function safeExp(x: number): number {
+  // avoid overflow
+  if (x > 700) return Number.POSITIVE_INFINITY;
+  if (x < -700) return 0;
+  return Math.exp(x);
+}
+
+function computeEntropyFromTopLogprobs(top: any): number | undefined {
+  // Accept either:
+  // - array of { token, logprob } objects
+  // - object map { token: logprob }
+  let entries: Array<{ token: string; logprob: number }> = [];
+  if (Array.isArray(top)) {
+    entries = top
+      .map((x: any) => ({ token: String(x?.token ?? ""), logprob: Number(x?.logprob) }))
+      .filter(e => e.token && Number.isFinite(e.logprob));
+  } else if (top && typeof top === "object") {
+    entries = Object.entries(top)
+      .map(([tok, lp]) => ({ token: String(tok), logprob: Number(lp) }))
+      .filter(e => e.token && Number.isFinite(e.logprob));
+  }
+  if (entries.length === 0) return undefined;
+  // Normalize in log-space
+  const maxLp = Math.max(...entries.map(e => e.logprob));
+  const ps = entries.map(e => safeExp(e.logprob - maxLp));
+  const Z = ps.reduce((a, b) => a + b, 0);
+  if (!Number.isFinite(Z) || Z <= 0) return undefined;
+  let H = 0;
+  for (const p0 of ps) {
+    const p = p0 / Z;
+    if (p > 0) H += -p * Math.log(p);
+  }
+  return H; // nats
+}
+
+function extractLogprobsMetrics(choice: any, requestedTopK?: number): {
+  tokenCount: number;
+  avgTokenLogprob: number;
+  perplexity: number;
+  entropy?: number;
+  topK?: number;
+} | undefined {
+  const lp = choice?.logprobs;
+  if (!lp) return undefined;
+
+  // OpenAI-style chat logprobs: { content: [{ token, logprob, top_logprobs: [...] }, ...] }
+  const contentArr = lp?.content;
+  if (Array.isArray(contentArr) && contentArr.length) {
+    const toks = contentArr
+      .map((x: any) => Number(x?.logprob))
+      .filter((v: number) => Number.isFinite(v));
+    if (toks.length === 0) return undefined;
+    const avg = toks.reduce((a, b) => a + b, 0) / toks.length;
+    const ppl = safeExp(-avg);
+
+    // Optional entropy: average per-token entropy computed from top_logprobs
+    const entropies: number[] = [];
+    for (const x of contentArr) {
+      const e = computeEntropyFromTopLogprobs(x?.top_logprobs);
+      if (typeof e === "number" && Number.isFinite(e)) entropies.push(e);
+    }
+    const entropy = entropies.length ? (entropies.reduce((a, b) => a + b, 0) / entropies.length) : undefined;
+    return { tokenCount: toks.length, avgTokenLogprob: avg, perplexity: ppl, entropy, topK: requestedTopK };
+  }
+
+  // Completions-style logprobs: { token_logprobs: number[], top_logprobs: object[] }
+  const tokenLogprobs = lp?.token_logprobs;
+  if (Array.isArray(tokenLogprobs) && tokenLogprobs.length) {
+    const toks = tokenLogprobs.map(Number).filter((v: number) => Number.isFinite(v));
+    if (toks.length === 0) return undefined;
+    const avg = toks.reduce((a, b) => a + b, 0) / toks.length;
+    const ppl = safeExp(-avg);
+    const topList = lp?.top_logprobs;
+    let entropy: number | undefined;
+    if (Array.isArray(topList) && topList.length) {
+      const entropies: number[] = [];
+      for (const top of topList) {
+        const e = computeEntropyFromTopLogprobs(top);
+        if (typeof e === "number" && Number.isFinite(e)) entropies.push(e);
+      }
+      entropy = entropies.length ? (entropies.reduce((a, b) => a + b, 0) / entropies.length) : undefined;
+    }
+    return { tokenCount: toks.length, avgTokenLogprob: avg, perplexity: ppl, entropy, topK: requestedTopK };
+  }
+
+  return undefined;
+}
+
 export function shouldEnableSampling(server: Server): boolean {
   const cfg = loadSamplerConfig();
   const hasCerebras = !!(cfg.cerebrasApiKey && cfg.cerebrasModel);
@@ -21,6 +115,8 @@ async function directOpenAISample(prompt: string, maxTokens: number, diag?: Samp
   const apiKey = cfg.openaiApiKey;
   if (!apiKey) return null;
   const model = cfg.openaiModel || "gpt-4o-mini";
+  const wantLogprobs = cfg.logprobs === true;
+  const topK = clampInt(cfg.topLogprobs, 0, 20, 5);
   try {
     if (diag) {
       diag.provider = "direct-openai";
@@ -39,6 +135,7 @@ async function directOpenAISample(prompt: string, maxTokens: number, diag?: Samp
         messages: [{ role: "user", content: prompt }],
         max_tokens: Math.max(1, Math.min(16000, maxTokens)),
         temperature: 0.2,
+        ...(wantLogprobs ? { logprobs: true, top_logprobs: topK } : {}),
       }),
     });
     if (!res.ok) {
@@ -50,12 +147,28 @@ async function directOpenAISample(prompt: string, maxTokens: number, diag?: Samp
       return null;
     }
     const data: any = await res.json();
-    const text: string | undefined = data?.choices?.[0]?.message?.content;
+    const choice: any = data?.choices?.[0];
+    const text: string | undefined = choice?.message?.content;
+    const metrics = wantLogprobs ? extractLogprobsMetrics(choice, topK) : undefined;
     if (diag) {
       diag.lastResponseChars = text?.length;
       diag.lastOkAt = new Date().toISOString();
+      if (metrics) {
+        diag.lastTokenCount = metrics.tokenCount;
+        diag.lastAvgTokenLogprob = metrics.avgTokenLogprob;
+        diag.lastPerplexity = metrics.perplexity;
+        diag.lastEntropy = metrics.entropy;
+        diag.lastTopLogprobsK = metrics.topK;
+      }
       diag.rawSamples = diag.rawSamples || [];
-      diag.rawSamples.push({ prompt, response: text, model, provider: diag.provider, at: new Date().toISOString() });
+      diag.rawSamples.push({
+        prompt,
+        response: text,
+        model,
+        provider: diag.provider,
+        at: new Date().toISOString(),
+        ...(metrics ? { tokenCount: metrics.tokenCount, avgTokenLogprob: metrics.avgTokenLogprob, perplexity: metrics.perplexity, entropy: metrics.entropy } : {})
+      });
     }
     return typeof text === "string" ? text : null;
   } catch (e: any) {
@@ -73,6 +186,8 @@ async function directCerebrasSample(prompt: string, maxTokens: number, diag?: Sa
   if (!apiKey) return null;
   const model = cfg.cerebrasModel;
   if (!model) return null;
+  const wantLogprobs = cfg.logprobs === true;
+  const topK = clampInt(cfg.topLogprobs, 0, 20, 5);
   try {
     const base = (cfg.cerebrasBaseUrl || "https://api.cerebras.ai/v1").replace(/\/$/, "");
     if (diag) {
@@ -92,6 +207,7 @@ async function directCerebrasSample(prompt: string, maxTokens: number, diag?: Sa
         messages: [{ role: "user", content: prompt }],
         max_tokens: Math.max(1, Math.min(16000, maxTokens)),
         temperature: 0.2,
+        ...(wantLogprobs ? { logprobs: true, top_logprobs: topK } : {}),
       }),
     });
     if (!res.ok) {
@@ -108,12 +224,28 @@ async function directCerebrasSample(prompt: string, maxTokens: number, diag?: Sa
       return null;
     }
     const data: any = await res.json();
-    const text: string | undefined = data?.choices?.[0]?.message?.content;
+    const choice: any = data?.choices?.[0];
+    const text: string | undefined = choice?.message?.content;
+    const metrics = wantLogprobs ? extractLogprobsMetrics(choice, topK) : undefined;
     if (diag) {
       diag.lastResponseChars = text?.length;
       diag.lastOkAt = new Date().toISOString();
+      if (metrics) {
+        diag.lastTokenCount = metrics.tokenCount;
+        diag.lastAvgTokenLogprob = metrics.avgTokenLogprob;
+        diag.lastPerplexity = metrics.perplexity;
+        diag.lastEntropy = metrics.entropy;
+        diag.lastTopLogprobsK = metrics.topK;
+      }
       diag.rawSamples = diag.rawSamples || [];
-      diag.rawSamples.push({ prompt, response: text, model, provider: diag.provider, at: new Date().toISOString() });
+      diag.rawSamples.push({
+        prompt,
+        response: text,
+        model,
+        provider: diag.provider,
+        at: new Date().toISOString(),
+        ...(metrics ? { tokenCount: metrics.tokenCount, avgTokenLogprob: metrics.avgTokenLogprob, perplexity: metrics.perplexity, entropy: metrics.entropy } : {})
+      });
     }
     return typeof text === "string" ? text : null;
   } catch (e: any) {

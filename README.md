@@ -93,6 +93,14 @@ Then you can continue with `step` / `multi-step` and finish via `summarize`.
 
 Notes:
 - Cerebras requires BOTH `CEREBRAS_API_KEY` and `CEREBRAS_MODEL`; no hardcoded model fallback.
+ - Optional uncertainty metrics: you can enable token logprobs via config (Cerebras/OpenAI chat):
+   - add to `config.local.json`:
+     ```json
+     {
+       "sampling": { "logprobs": true, "topLogprobs": 5 }
+     }
+     ```
+   - When enabled, `diagnostics` includes `lastPerplexity`, `lastEntropy`, `lastAvgTokenLogprob` and the latest `rawSamples[]` entry also contains these aggregates.
 
 ### Recommended settings
 - Strong models: `numCandidates: 7–9`, `samplingMaxTokens: 2000–4000`, `beamWidth: 2`, `beamDepth: 2`, `llmMaxCalls: 12–24`, `voiAlpha: 0.5–0.8`

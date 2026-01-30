@@ -114,6 +114,12 @@ export interface SamplerDiagnostics {
   lastErrorAt?: string;
   lastHttpStatus?: number;
   lastError?: string;
+  // Optional uncertainty metrics (when logprobs are enabled)
+  lastTokenCount?: number;
+  lastAvgTokenLogprob?: number; // mean(log p(token))
+  lastPerplexity?: number; // exp(-mean(log p(token)))
+  lastEntropy?: number; // mean token entropy (approx; depends on top_logprobs)
+  lastTopLogprobsK?: number;
   provider?: string; // "mcp" | "direct-openai" | "direct-anthropic" | other
   rawSamples?: Array<{
     prompt: string;
@@ -121,6 +127,10 @@ export interface SamplerDiagnostics {
     model?: string;
     provider?: string;
     at: string;
+    tokenCount?: number;
+    avgTokenLogprob?: number;
+    perplexity?: number;
+    entropy?: number;
   }>;
 }
 
